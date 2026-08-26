@@ -13,11 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: pnpm/setup@v1
         with:
-          node-version: 22
-          cache: pnpm
-      - run: corepack enable
+          version: 11.19.0
+          runtime: node@22
+          cache: true
+          install: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
   deploy-api:
@@ -26,11 +27,12 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: pnpm/setup@v1
         with:
-          node-version: 22
-          cache: pnpm
-      - run: corepack enable
+          version: 11.19.0
+          runtime: node@22
+          cache: true
+          install: false
       - run: pnpm install --frozen-lockfile
       - name: Configure production frontend origin
         run: >-
@@ -58,11 +60,12 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: pnpm/setup@v1
         with:
-          node-version: 22
-          cache: pnpm
-      - run: corepack enable
+          version: 11.19.0
+          runtime: node@22
+          cache: true
+          install: false
       - run: pnpm install --frozen-lockfile
       - name: Configure production API URL
         run: >-
