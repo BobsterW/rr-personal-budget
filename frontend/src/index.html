@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Private transaction, monthly spending, and net-worth tracker."
+    />
+    <title>R&R Budget</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Authentication is the only visible section until /auth/me confirms a session. -->
+    <section id="auth-screen" class="auth-screen">
+      <div class="auth-card">
+        <p class="eyebrow">Private by design</p>
+        <h1>R&R Budget</h1>
+        <p>Sign in to your budget, or create a completely separate account.</p>
+        <div class="auth-tabs" role="tablist">
+          <button id="show-login" type="button">Sign in</button>
+          <button id="show-register" type="button" class="secondary">
+            Create account
+          </button>
+        </div>
+        <form id="login-form" class="auth-form">
+          <label
+            >Username<input name="username" autocomplete="username" required
+          /></label>
+          <label>Password</label>
+          <div class="password-field">
+            <input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+              aria-label="Password"
+            />
+            <button
+              class="password-toggle secondary"
+              type="button"
+              aria-label="Show password"
+              aria-pressed="false"
+            >
+              Eye
+            </button>
+          </div>
+          <button type="submit">Sign in</button>
+        </form>
+        <form id="register-form" class="auth-form" hidden>
+          <label
+            >Username<input
+              name="username"
+              minlength="3"
+              maxlength="40"
+              autocomplete="username"
+              required
+          /></label>
+          <label>Password</label>
+          <div class="password-field">
+            <input
+              name="password"
+              type="password"
+              minlength="8"
+              maxlength="72"
+              autocomplete="new-password"
+              required
+              aria-label="Password"
+            />
+            <button
+              class="password-toggle secondary"
+              type="button"
+              aria-label="Show password"
+              aria-pressed="false"
+            >
+              Eye
+            </button>
+          </div>
+          <p class="fine-print">
+            At least 8 characters with a capital letter, number, and special
+            character.
+          </p>
+          <button type="submit">Create my budget</button>
+        </form>
+        <p id="auth-error" class="auth-error" role="alert" hidden></p>
+      </div>
+    </section>
+    <!-- All elements with app-shell are revealed together after authentication. -->
+    <header class="topbar app-shell" hidden>
+      <a class="brand" href="#transactions"><span>R&R</span> Budget</a>
+      <nav aria-label="Primary">
+        <a href="#transactions">Transactions</a
+        ><a href="#spending">Monthly spending</a><a href="#budget">Budget</a
+        ><a href="#net-worth">Net worth</a><a href="#settings">Settings</a>
+      </nav>
+      <div class="user-menu">
+        <span id="current-username"></span
+        ><button id="logout" class="secondary">Sign out</button>
+      </div>
+    </header>
+    <main class="app-shell" hidden>
+      <div
+        id="notice"
+        class="notice"
+        role="status"
+        aria-live="polite"
+        hidden
+      ></div>
+      <section id="transactions" class="view">
+        <div class="hero">
+          <div>
+            <p class="eyebrow">Money in motion</p>
+            <h1>Transactions</h1>
+            <p>Keep the details tidy. The bigger picture follows.</p>
+          </div>
+          <div class="hero-actions">
+            <button data-dialog="transaction-dialog">Add transaction</button
+            ><button class="secondary" data-dialog="import-dialog">
+              Import CSV
+            </button>
+          </div>
+        </div>
+        <div class="panel filters">
+          <label
+            >Start date<input id="transaction-start-date" type="date" /></label
+          ><label>End date<input id="transaction-end-date" type="date" /></label
+          ><label
+            >Search<input
+              id="transaction-search"
+              type="search"
+              placeholder="Vendor or description" /></label
+          ><label
+            >Type<select id="transaction-type-filter">
+              <option value="">All types</option>
+              <option>expense</option>
+              <option>income</option>
+              <option>transfer</option>
+              <option>adjustment</option>
+            </select></label
+          ><label
+            >Sort<select id="transaction-sort">
+              <option value="date-desc">Newest first</option>
+              <option value="date-asc">Oldest first</option>
+              <option value="amount-desc">Largest amount</option>
+              <option value="amount-asc">Smallest amount</option>
+              <option value="category-asc">Category A–Z</option>
+              <option value="category-desc">Category Z–A</option>
+              <option value="account-asc">Account A–Z</option>
+              <option value="account-desc">Account Z–A</option>
+            </select></label
+          ><button class="secondary" id="apply-filters">Apply filters</button>
+        </div>
+        <div class="panel table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Vendor</th>
+                <th>Category</th>
+                <th>Account</th>
+                <th>Type</th>
+                <th class="money">Amount</th>
+                <th><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="transactions-body"></tbody>
+          </table>
+          <div id="transactions-empty" class="empty" hidden>
+            No transactions match these filters.
+          </div>
+          <div class="pagination">
+            <button class="secondary" id="previous-page">Previous</button
+            ><span id="page-label"></span
+            ><button class="secondary" id="next-page">Next</button>
+          </div>
+        </div>
+      </section>
+      <section id="spending" class="view" hidden>
+        <div class="hero">
+          <div>
+            <p class="eyebrow">Monthly pulse</p>
+            <h1>Monthly spending</h1>
+            <p>Actual activity from your transaction ledger.</p>
+          </div>
+          <div class="hero-actions">
+            <label
+              >Start date<input id="summary-start-date" type="date" /></label
+            ><label>End date<input id="summary-end-date" type="date" /></label
+            ><button id="apply-summary-range">Apply</button>
+          </div>
+        </div>
+        <div class="metric-grid">
+          <article>
+            <span>Income</span><strong id="income-total">—</strong>
+          </article>
+          <article>
+            <span>Expenses</span><strong id="expense-total">—</strong>
+          </article>
+          <article>
+            <span>Net cash flow</span><strong id="cashflow-total">—</strong>
+          </article>
+          <article>
+            <span>Transactions</span><strong id="transaction-count">—</strong>
+          </article>
+          <article>
+            <span>Expense budget</span><strong id="budget-total">—</strong>
+          </article>
+          <article>
+            <span>Budget remaining</span
+            ><strong id="budget-remaining">—</strong>
+          </article>
+        </div>
+        <p id="month-comparison" class="fine-print"></p>
+        <div class="networth-stack">
+          <section class="panel">
+            <h2>By master category</h2>
+            <div id="master-category-bars" class="bars"></div>
+          </section>
+          <section class="panel">
+            <h2>By category</h2>
+            <div id="category-bars" class="bars"></div>
+          </section>
+        </div>
+        <section class="panel">
+          <h2>By account</h2>
+          <div id="account-bars" class="bars"></div>
+        </section>
+        <section class="panel">
+          <h2>Category budget tracking</h2>
+          <div id="category-budget-status" class="budget-status"></div>
+        </section>
+        <div class="networth-stack monthly-trend-stack">
+          <section class="panel">
+            <h2>Expense trend</h2>
+            <label
+              >Category or master category<select
+                id="expense-trend-filter"
+              ></select
+            ></label>
+            <div id="expense-trend-chart" class="trend-chart"></div>
+          </section>
+          <section class="panel">
+            <h2>Income trend</h2>
+            <label
+              >Category or master category<select
+                id="income-trend-filter"
+              ></select
+            ></label>
+            <div id="income-trend-chart" class="trend-chart"></div>
+          </section>
+        </div>
+      </section>
+      <section id="budget" class="view" hidden>
+        <div class="hero">
+          <div>
+            <p class="eyebrow">Plan the month</p>
+            <h1>Budget</h1>
+            <p>Set a monthly target for every expense and income category.</p>
+          </div>
+        </div>
+        <form id="budget-form">
+          <div class="split">
+            <section class="panel">
+              <h2>Expense budget</h2>
+              <div id="expense-budget-list" class="budget-list"></div>
+              <div class="budget-total">
+                <span>Total monthly expenses</span
+                ><strong id="expense-budget-total">$0.00</strong>
+              </div>
+            </section>
+            <section class="panel">
+              <h2>Income target</h2>
+              <div id="income-budget-list" class="budget-list"></div>
+              <div class="budget-total">
+                <span>Total monthly income</span
+                ><strong id="income-budget-total">$0.00</strong>
+              </div>
+            </section>
+          </div>
+          <div class="panel budget-summary">
+            <span>Planned monthly remainder</span
+            ><strong id="planned-remainder">$0.00</strong
+            ><button>Save budget</button>
+          </div>
+        </form>
+      </section>
+      <section id="net-worth" class="view" hidden>
+        <div class="hero">
+          <div>
+            <p class="eyebrow">Long view</p>
+            <h1>Net worth</h1>
+            <p>Actual balance snapshots and a transparent projection.</p>
+          </div>
+          <div class="hero-actions">
+            <label
+              >Start date<input id="networth-start-date" type="date"
+            /></label>
+            <label>End date<input id="networth-end-date" type="date" /></label>
+            <button id="apply-networth-range">Apply</button>
+            <button class="secondary" data-dialog="balance-dialog">
+              Record balance
+            </button>
+            <button class="secondary" data-dialog="future-purchase-dialog">
+              Plan purchase
+            </button>
+          </div>
+        </div>
+        <div class="metric-grid">
+          <article>
+            <span>Current assets</span><strong id="assets-total">—</strong>
+          </article>
+          <article>
+            <span>Current liabilities</span
+            ><strong id="liabilities-total">—</strong>
+          </article>
+          <article class="accent">
+            <span>Current net worth</span><strong id="networth-total">—</strong>
+          </article>
+        </div>
+        <section class="panel networth-chart-panel">
+          <h2>Actual & projected net worth</h2>
+          <div class="chart-legend">
+            <span class="fixed-key">Fixed net worth</span
+            ><span class="liquid-key"
+              >Liquid net worth stacked above fixed</span
+            >
+          </div>
+          <div id="projection-chart" class="projection-chart"></div>
+          <p class="fine-print">
+            History uses balance snapshots plus transaction balance effects.
+            Transfers without a known debit/credit direction are excluded.
+          </p>
+        </section>
+        <section class="panel projection-assumptions-panel">
+          <h2>Projection assumptions</h2>
+          <form id="projection-form" class="projection-assumptions-form">
+            <label
+              >Monthly income<input
+                name="monthlyIncome"
+                type="number"
+                step="0.01"
+                required /></label
+            ><label
+              >Monthly expenses<input
+                name="monthlyExpense"
+                type="number"
+                step="0.01"
+                required /></label
+            ><label
+              >Additional monthly savings<input
+                name="monthlySavings"
+                type="number"
+                step="0.01"
+                required /></label
+            ><button type="submit">Save assumptions</button>
+          </form>
+          <p class="fine-print">
+            The selected graph end date controls the projection length. Income,
+            expenses, savings, account payments, equity, and dividends affect
+            future balances. This is a planning estimate, not financial advice.
+          </p>
+        </section>
+        <section class="panel">
+          <h2>Balance history</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Account</th>
+                  <th>Type</th>
+                  <th class="money">Balance</th>
+                </tr>
+              </thead>
+              <tbody id="balances-body"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Planned future purchases</h2>
+          <div id="future-purchases-list" class="settings-list"></div>
+        </section>
+      </section>
+      <section id="settings" class="view" hidden>
+        <div class="hero">
+          <div>
+            <p class="eyebrow">Make it yours</p>
+            <h1>Categories & accounts</h1>
+          </div>
+        </div>
+        <div class="settings-accordions">
+          <details class="panel settings-disclosure" open>
+            <summary>Categories</summary>
+            <div class="settings-content">
+              <form id="category-form" class="inline-form">
+                <input
+                  name="name"
+                  placeholder="Category name"
+                  required
+                /><select name="kind">
+                  <option>expense</option>
+                  <option>income</option>
+                  <option>transfer</option>
+                  <option>adjustment</option></select
+                ><button>Add</button>
+              </form>
+              <ul id="categories-list" class="settings-list"></ul>
+            </div>
+          </details>
+          <details class="panel settings-disclosure">
+            <summary>Master categories</summary>
+            <div class="settings-content">
+              <p class="fine-print">
+                Group detailed categories into the smaller set shown in Monthly
+                spending.
+              </p>
+              <form id="master-category-form" class="inline-form">
+                <input
+                  name="name"
+                  placeholder="Example: Essentials"
+                  maxlength="80"
+                  required
+                /><button>Add</button>
+              </form>
+              <ul id="master-categories-list" class="settings-list"></ul>
+            </div>
+          </details>
+          <details class="panel settings-disclosure">
+            <summary>Accounts</summary>
+            <div class="settings-content">
+              <p class="fine-print">
+                Add banks, cards, investments, property, vehicles, and loans.
+                Each account can have its own projection assumptions.
+              </p>
+              <button data-dialog="account-dialog">Add account</button>
+              <ul id="accounts-list" class="settings-list"></ul>
+            </div>
+          </details>
+          <details class="panel settings-disclosure">
+            <summary>Automatic category rules</summary>
+            <div class="settings-content">
+              <p class="fine-print">
+                Descriptions containing a rule's text receive that category
+                automatically. Lower priorities run first.
+              </p>
+              <form id="category-rule-form" class="form-grid">
+                <label
+                  >Contains<input
+                    name="pattern"
+                    placeholder="COSTCO"
+                    maxlength="120"
+                    required
+                /></label>
+                <label
+                  >Category<select name="categoryId" required></select
+                ></label>
+                <label
+                  >Priority<input
+                    name="priority"
+                    type="number"
+                    min="1"
+                    max="999"
+                    value="100"
+                    required
+                /></label>
+                <button>Add rule</button>
+              </form>
+              <ul id="category-rules-list" class="settings-list"></ul>
+            </div>
+          </details>
+        </div>
+      </section>
+    </main>
+    <dialog id="transaction-dialog">
+      <form id="transaction-form">
+        <div class="dialog-heading">
+          <h2 id="transaction-title">Add transaction</h2>
+          <button
+            type="button"
+            class="icon secondary"
+            data-close
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <input type="hidden" name="id" />
+        <div class="form-grid">
+          <label
+            >Date<input name="transactionDate" type="date" required /></label
+          ><label
+            >Type<select name="transactionType" required>
+              <option>expense</option>
+              <option>income</option>
+              <option>transfer</option>
+              <option>adjustment</option>
+            </select></label
+          ><label>Category<select name="categoryId" required></select></label
+          ><label>Account/card<select name="accountId" required></select></label
+          ><label
+            >Vendor<input name="vendorName" maxlength="120" required /></label
+          ><label
+            >Amount (CAD)<input
+              name="amount"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required /></label
+          ><label class="wide"
+            >Description<textarea name="description" maxlength="500"></textarea>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" data-close>Cancel</button
+          ><button type="submit">Save transaction</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="balance-dialog">
+      <form id="balance-form">
+        <div class="dialog-heading">
+          <h2>Record balance</h2>
+          <button
+            type="button"
+            class="icon secondary"
+            data-close
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="form-grid">
+          <label>Account<select name="accountId" required></select></label
+          ><label>Date<input name="snapshotDate" type="date" required /></label
+          ><label
+            >Balance (CAD)<input
+              name="balance"
+              type="number"
+              step="0.01"
+              required /></label
+          ><label>Note<input name="note" maxlength="500" /></label>
+        </div>
+        <p class="fine-print">Enter liabilities as negative values.</p>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" data-close>Cancel</button
+          ><button>Save balance</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="future-purchase-dialog">
+      <form id="future-purchase-form">
+        <div class="dialog-heading">
+          <h2>Plan a future purchase</h2>
+          <button
+            type="button"
+            class="icon secondary"
+            data-close
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="form-grid">
+          <label class="wide"
+            >Description<input name="description" maxlength="500" required
+          /></label>
+          <label
+            >Amount (CAD)<input
+              name="amount"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+          /></label>
+          <label
+            >Purchase date<input name="purchaseDate" type="date" required
+          /></label>
+          <label>Account<select name="accountId" required></select></label>
+        </div>
+        <p class="fine-print">
+          The amount is deducted from the selected account on this date in the
+          projection.
+        </p>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" data-close>Cancel</button
+          ><button>Save planned purchase</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="account-dialog">
+      <form id="account-form">
+        <div class="dialog-heading">
+          <h2 id="account-title">Add account</h2>
+          <button
+            type="button"
+            class="icon secondary"
+            data-close
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <input type="hidden" name="id" />
+        <div class="form-grid">
+          <label
+            >Account name<input name="name" maxlength="80" required
+          /></label>
+          <label
+            >Account type<select name="accountType" required>
+              <option value="credit_card">Credit card</option>
+              <option>chequing</option>
+              <option>savings</option>
+              <option>cash</option>
+              <option>investment</option>
+              <option>asset</option>
+              <option>liability</option>
+            </select></label
+          >
+          <label
+            >Net-worth group<select name="liquidityClass" required>
+              <option value="liquid">Liquid</option>
+              <option value="fixed">Fixed</option>
+            </select></label
+          >
+          <label
+            >Interest due (% yearly)<input
+              name="annualInterest"
+              type="number"
+              step="0.01"
+              value="0"
+          /></label>
+          <label
+            >Regular payment<input
+              name="paymentAmount"
+              type="number"
+              min="0"
+              step="0.01"
+              value="0"
+          /></label>
+          <label
+            >Payment frequency<select name="paymentFrequency">
+              <option value="none">None</option>
+              <option>monthly</option>
+              <option>yearly</option>
+            </select></label
+          >
+          <label
+            >Equity built per year<input
+              name="annualEquityGain"
+              type="number"
+              min="0"
+              step="0.01"
+              value="0"
+          /></label>
+          <label
+            >Dividends per year<input
+              name="annualDividend"
+              type="number"
+              min="0"
+              step="0.01"
+              value="0"
+          /></label>
+          <label class="wide"
+            >Projection notes<textarea
+              name="projectionNotes"
+              maxlength="500"
+              placeholder="Optional: mortgage term, expected sale date, contribution plan…"
+            ></textarea>
+          </label>
+        </div>
+        <p class="fine-print">
+          Use asset for a home or vehicle and liability for a mortgage or loan.
+          Record the current value separately under Net worth → Record balance.
+        </p>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" data-close>Cancel</button
+          ><button>Save account</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="import-dialog">
+      <form id="import-form">
+        <div class="dialog-heading">
+          <h2>Import CSV</h2>
+          <button
+            type="button"
+            class="icon secondary"
+            data-close
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          >CSV file<input
+            name="file"
+            type="file"
+            accept=".csv,text/csv"
+            required /></label
+        ><label
+          >Target account<select name="accountId" required></select
+        ></label>
+        <div id="mapping" class="form-grid" hidden></div>
+        <div id="import-preview" class="table-wrap"></div>
+        <p id="import-status" class="fine-print">
+          Choose a CSV to preview it. You can set a category and optional
+          description for every row before saving.
+        </p>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" data-close>Cancel</button
+          ><button id="import-submit" disabled>Import accepted rows</button>
+        </div>
+      </form>
+    </dialog>
+    <script src="config.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Public Worker name and TypeScript entry point used by Wrangler.
+  "name": "rr-personal-budget-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "vars": {
+    // Safe runtime configuration. Production overrides ALLOWED_ORIGINS with
+    // the deployed Cloudflare Pages address; secrets never belong here.
+    "ALLOWED_ORIGINS": "http://localhost:8788,http://127.0.0.1:8788",
+    "BASE_CURRENCY": "CAD",
+    "APP_TIMEZONE": "America/Edmonton",
+  },
+  "d1_databases": [
+    {
+      // Code receives this binding as env.DB. Replace the placeholder only
+      // after creating the real D1 database in the Cloudflare account.
+      "binding": "DB",
+      "database_name": "rr-budget",
+      "database_id": "5afe0239-dbc5-4ac2-8487-9e170d503921",
+      "migrations_dir": "../database/migrations",
+    },
+  ],
+}
+

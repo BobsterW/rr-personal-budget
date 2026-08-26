@@ -1,0 +1,6 @@
+node_modules
+.wrangler
+dist
+work
+outputs
+worker/worker-configuration.d.ts

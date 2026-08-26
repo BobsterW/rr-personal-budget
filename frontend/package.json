@@ -1,0 +1,14 @@
+{
+  "name": "@rr-budget/frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "lint": "eslint src",
+    "dev": "node scripts/build.mjs && wrangler pages dev dist --port 8788"
+  },
+  "devDependencies": {
+    "eslint": "9.34.0",
+    "wrangler": "4.124.0"
+  }
+}

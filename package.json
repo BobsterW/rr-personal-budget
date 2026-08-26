@@ -1,0 +1,22 @@
+{
+  "name": "rr-personal-budget",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "build": "pnpm --filter @rr-budget/worker build && pnpm --filter @rr-budget/frontend build",
+    "typecheck": "pnpm --filter @rr-budget/worker typecheck",
+    "test": "pnpm --filter @rr-budget/worker test",
+    "lint": "pnpm --filter @rr-budget/worker lint && pnpm --filter @rr-budget/frontend lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "workspaces": [
+    "frontend",
+    "worker"
+  ],
+  "devDependencies": {
+    "prettier": "3.6.2"
+  }
+}
