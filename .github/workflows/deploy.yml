@@ -43,17 +43,16 @@ jobs:
           FRONTEND_ORIGIN: ${{ vars.FRONTEND_ORIGIN }}
       - name: Apply D1 migrations
         working-directory: worker
-        run: npx wrangler d1 migrations apply rr-budget --remote
+        run: pnpm exec wrangler d1 migrations apply rr-budget --remote
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: worker
-          command: deploy
+        working-directory: worker
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
   deploy-frontend:
     needs: [validate, deploy-api]
     runs-on: ubuntu-latest
@@ -75,9 +74,9 @@ jobs:
           API_URL: ${{ vars.WORKER_API_URL }}
       - run: pnpm --filter @rr-budget/frontend build
       - name: Deploy Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy frontend/dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }} --branch=main
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          pnpm --dir worker exec wrangler pages deploy ../frontend/dist
+          --project-name="${{ vars.CLOUDFLARE_PAGES_PROJECT }}" --branch=main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
