@@ -66,13 +66,9 @@ jobs:
           cache: true
           install: false
       - run: pnpm install --frozen-lockfile
-      - name: Configure production API URL
-        run: >-
-          node -e "require('fs').writeFileSync('frontend/src/config.js',
-          'window.APP_CONFIG = { API_BASE_URL: ' + JSON.stringify(process.env.API_URL) + ' };\n')"
-        env:
-          API_URL: ${{ vars.WORKER_API_URL }}
       - run: pnpm --filter @rr-budget/frontend build
+      - name: Verify production API URL
+        run: grep -F "https://rr-personal-budget-api.bobbyw.workers.dev" frontend/dist/config.js
       - name: Deploy Pages
         run: >-
           pnpm --dir worker exec wrangler pages deploy ../frontend/dist

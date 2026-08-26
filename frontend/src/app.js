@@ -59,12 +59,16 @@ async function api(path, options = {}) {
       },
     });
   } catch (cause) {
-    // Fetch only rejects when no HTTP response was available (for example, the
-    // local Worker terminal stopped). Explain the actionable cause and endpoint.
-    throw new Error(
-      `Cannot reach the budget API at ${API}. Make sure the Worker PowerShell window is still running, then try again.`,
-      { cause },
-    );
+    // Fetch only rejects when no HTTP response was available. Give local users
+    // the terminal hint, while production users get deployment-oriented advice.
+    const recovery = ["localhost", "127.0.0.1"].includes(
+      window.location.hostname,
+    )
+      ? "Make sure the Worker PowerShell window is still running, then try again."
+      : "The deployed Worker may be unavailable or may not allow this Pages address.";
+    throw new Error(`Cannot reach the budget API at ${API}. ${recovery}`, {
+      cause,
+    });
   }
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => ({
