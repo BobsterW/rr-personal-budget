@@ -45,8 +45,9 @@ const escapeHtml = (value) =>
       ],
   );
 
-// Central HTTP helper. `credentials: include` sends the protected session
-// cookie even when Pages and the Worker use separate approved origins.
+// Central HTTP helper. In production, /api is handled by a same-origin Pages
+// Function that securely relays requests to the dedicated API Worker. This
+// allows mobile browsers to use the HttpOnly session cookie reliably.
 async function api(path, options = {}) {
   let response;
   try {

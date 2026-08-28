@@ -13,5 +13,5 @@ const isLocalDevelopment = ["localhost", "127.0.0.1"].includes(
 window.APP_CONFIG = {
   API_BASE_URL: isLocalDevelopment
     ? `${window.location.protocol}//${window.location.hostname}:8787`
-    : "https://rr-personal-budget-api.bobbyw.workers.dev",
+    : window.location.origin,
 };

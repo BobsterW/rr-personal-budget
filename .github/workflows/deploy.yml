@@ -67,11 +67,12 @@ jobs:
           install: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @rr-budget/frontend build
-      - name: Verify production API URL
-        run: grep -F "https://rr-personal-budget-api.bobbyw.workers.dev" frontend/dist/config.js
+      - name: Verify same-origin production API configuration
+        run: grep -F "window.location.origin" frontend/dist/config.js
       - name: Deploy Pages
+        working-directory: frontend
         run: >-
-          pnpm --dir worker exec wrangler pages deploy ../frontend/dist
+          pnpm exec wrangler pages deploy dist
           --project-name="${{ vars.CLOUDFLARE_PAGES_PROJECT }}" --branch=main
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
