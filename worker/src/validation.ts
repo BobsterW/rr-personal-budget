@@ -2,6 +2,7 @@
  * normalized TransactionInput; failure returns field-specific issues. */
 import type {
   TransactionInput,
+  TransactionDirection,
   TransactionType,
   ValidationIssue,
 } from "./types";
@@ -13,6 +14,7 @@ const TYPES = new Set<TransactionType>([
   "transfer",
   "adjustment",
 ]);
+const DIRECTIONS = new Set<TransactionDirection>(["debit", "credit"]);
 
 export function isIsoDate(value: unknown): value is string {
   if (typeof value !== "string" || !ISO_DATE.test(value)) return false;
@@ -74,6 +76,14 @@ export function validateTransaction(value: unknown): {
       message: "Use expense, income, transfer, or adjustment.",
     });
   if (
+    typeof body.transactionDirection !== "string" ||
+    !DIRECTIONS.has(body.transactionDirection as TransactionDirection)
+  )
+    issues.push({
+      field: "transactionDirection",
+      message: "Use debit for money out or credit for money in.",
+    });
+  if (
     body.currency !== undefined &&
     (typeof body.currency !== "string" || !/^[A-Z]{3}$/.test(body.currency))
   )
@@ -100,6 +110,7 @@ export function validateTransaction(value: unknown): {
       description: String(body.description ?? ""),
       amountMinor: Number(body.amountMinor),
       transactionType: body.transactionType as TransactionType,
+      transactionDirection: body.transactionDirection as TransactionDirection,
       currency: String(body.currency ?? "CAD"),
       importFingerprint:
         typeof body.importFingerprint === "string"

@@ -157,14 +157,24 @@ export function projectNetWorth(
 }
 
 export function monthlyTotals(
-  rows: Array<{ transaction_type: string; amount_minor: number }>,
+  rows: Array<{
+    transaction_type: string;
+    transaction_direction: "debit" | "credit";
+    amount_minor: number;
+  }>,
 ) {
   return rows.reduce(
     (totals, row) => {
       if (row.transaction_type === "expense")
-        totals.expenseMinor += row.amount_minor;
+        totals.expenseMinor +=
+          row.transaction_direction === "credit"
+            ? -row.amount_minor
+            : row.amount_minor;
       if (row.transaction_type === "income")
-        totals.incomeMinor += row.amount_minor;
+        totals.incomeMinor +=
+          row.transaction_direction === "debit"
+            ? -row.amount_minor
+            : row.amount_minor;
       if (row.transaction_type !== "transfer") totals.transactionCount += 1;
       totals.netCashFlowMinor = totals.incomeMinor - totals.expenseMinor;
       return totals;

@@ -9,6 +9,7 @@ import type {
 
 export interface TimelineAccount {
   id: string;
+  name: string;
   accountType: AccountType;
   liquidityClass: LiquidityClass;
   annualGrowthBps: number;
@@ -40,6 +41,13 @@ export interface TimelinePoint {
   fixedNetWorthMinor: number;
   liquidNetWorthMinor: number;
   netWorthMinor: number;
+  accounts: Array<{
+    id: string;
+    name: string;
+    accountType: AccountType;
+    liquidityClass: LiquidityClass;
+    balanceMinor: number;
+  }>;
 }
 
 const utc = (date: string) => new Date(`${date}T00:00:00Z`);
@@ -120,6 +128,26 @@ function aggregate(
     fixedNetWorthMinor: Math.round(fixed),
     liquidNetWorthMinor: Math.round(liquid),
     netWorthMinor: Math.round(fixed + liquid),
+    accounts: [
+      ...accounts.map((account) => ({
+        id: account.id,
+        name: account.name,
+        accountType: account.accountType,
+        liquidityClass: account.liquidityClass,
+        balanceMinor: Math.round(balances.get(account.id) ?? 0),
+      })),
+      ...(extraLiquid
+        ? [
+            {
+              id: "projected-cash-flow",
+              name: "Projected cash flow",
+              accountType: "cash" as const,
+              liquidityClass: "liquid" as const,
+              balanceMinor: Math.round(extraLiquid),
+            },
+          ]
+        : []),
+    ],
   };
 }
 

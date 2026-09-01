@@ -21,6 +21,13 @@ const state = {
   pageSize: 25,
   total: 0,
   csv: null,
+  summary: null,
+  selectedMasterCategoryId: null,
+  netWorthTimeline: null,
+  netWorthMode: "liquidity",
+  selectedNetWorthAccounts: new Set(),
+  netWorthSelectionInitialized: false,
+  netWorthLiquidityMarkup: "",
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -44,6 +51,24 @@ const escapeHtml = (value) =>
         char
       ],
   );
+const NAV_STORAGE_KEY = "rr-budget-nav-collapsed";
+const mobileNavigation = () => window.matchMedia("(max-width: 800px)").matches;
+function setMobileNavigation(open) {
+  document.body.classList.toggle("nav-open", open);
+  $("#mobile-nav-toggle")?.setAttribute("aria-expanded", String(open));
+  if ($("#sidebar-backdrop")) $("#sidebar-backdrop").hidden = !open;
+}
+function setNavigationCollapsed(collapsed) {
+  document.body.classList.toggle("nav-collapsed", collapsed);
+  const toggle = $("#nav-toggle");
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.setAttribute(
+      "aria-label",
+      collapsed ? "Expand navigation" : "Collapse navigation",
+    );
+  }
+}
 
 // Central HTTP helper. In production, /api is handled by a same-origin Pages
 // Function that securely relays requests to the dedicated API Worker. This
@@ -94,6 +119,7 @@ async function api(path, options = {}) {
 
 // Swap the private application for the sign-in card and display safe errors.
 function showAuth(error = "") {
+  setMobileNavigation(false);
   $("#auth-screen").hidden = false;
   $$(".app-shell").forEach((element) => (element.hidden = true));
   $("#auth-error").textContent = error;
@@ -105,6 +131,13 @@ async function enterApp(user) {
   $("#auth-screen").hidden = true;
   $$(".app-shell").forEach((element) => (element.hidden = false));
   $("#current-username").textContent = user.username;
+  let collapsed = false;
+  try {
+    collapsed = window.localStorage.getItem(NAV_STORAGE_KEY) === "true";
+  } catch {
+    // Storage can be unavailable in private modes; the expanded menu is safe.
+  }
+  setNavigationCollapsed(collapsed);
   await loadLookups();
   await showView();
 }
@@ -248,10 +281,20 @@ async function loadTransactions() {
   state.transactions = result.data;
   state.total = result.pagination.total;
   $("#transactions-body").innerHTML = state.transactions
-    .map(
-      (item) =>
-        `<tr><td>${escapeHtml(item.transactionDate)}</td><td><strong>${escapeHtml(item.vendorName)}</strong><br><small>${escapeHtml(item.description)}</small></td><td>${escapeHtml(item.categoryName)}</td><td>${escapeHtml(item.accountName)}</td><td><span class="pill">${escapeHtml(item.transactionType)}</span></td><td class="money">${money.format(dollars(item.amountMinor))}</td><td><button class="secondary edit-transaction" data-id="${escapeHtml(item.id)}">Edit</button> <button class="secondary danger delete-transaction" data-id="${escapeHtml(item.id)}">Delete</button></td></tr>`,
-    )
+    .map((item) => {
+      const direction = item.transactionDirection ?? "debit";
+      const signedMinor =
+        direction === "credit" ? item.amountMinor : -item.amountMinor;
+      const directionName =
+        item.transactionType === "expense" && direction === "credit"
+          ? "Refund"
+          : item.transactionType === "income" && direction === "debit"
+            ? "Reversal"
+            : direction === "credit"
+              ? "Money in"
+              : "Money out";
+      return `<tr class="transaction-${direction}"><td data-label="Date">${escapeHtml(item.transactionDate)}</td><td data-label="Vendor"><strong>${escapeHtml(item.vendorName)}</strong>${item.description ? `<br><small>${escapeHtml(item.description)}</small>` : ""}</td><td data-label="Category">${escapeHtml(item.categoryName)}</td><td data-label="Account">${escapeHtml(item.accountName)}</td><td data-label="Type"><span class="pill">${escapeHtml(item.transactionType)}</span> <span class="pill direction-pill">${escapeHtml(directionName)}</span></td><td data-label="Amount" class="money signed-amount">${signedMinor > 0 ? "+" : "−"}${money.format(Math.abs(dollars(signedMinor)))}</td><td data-label="Actions" class="transaction-actions"><button class="secondary edit-transaction" data-id="${escapeHtml(item.id)}">Edit</button> <button class="secondary danger delete-transaction" data-id="${escapeHtml(item.id)}">Delete</button></td></tr>`;
+    })
     .join("");
   $("#transactions-empty").hidden = state.transactions.length > 0;
   const pages = Math.max(1, Math.ceil(state.total / state.pageSize));
@@ -260,15 +303,116 @@ async function loadTransactions() {
   $("#next-page").disabled = state.page >= pages;
 }
 function drawBars(selector, rows) {
-  const max = Math.max(1, ...rows.map((row) => row.amountMinor));
+  const max = Math.max(1, ...rows.map((row) => Math.abs(row.amountMinor)));
   $(selector).innerHTML = rows.length
     ? rows
         .map(
           (row) =>
-            `<div class="bar-row"><span>${escapeHtml(row.name)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (row.amountMinor / max) * 100)}%"></div></div><strong>${money.format(dollars(row.amountMinor))}</strong></div>`,
+            `<div class="bar-row ${row.amountMinor < 0 ? "is-refund-total" : ""}"><span>${escapeHtml(row.name)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (Math.abs(row.amountMinor) / max) * 100)}%"></div></div><strong>${money.format(dollars(row.amountMinor))}</strong></div>`,
         )
         .join("")
     : '<div class="empty">No spending this month.</div>';
+}
+
+const chartColors = [
+  "#185b45",
+  "#8aa32b",
+  "#d79039",
+  "#396f8f",
+  "#91649b",
+  "#bd5e50",
+  "#4c8d77",
+  "#a77d42",
+];
+const masterKey = (value) => value || "unassigned";
+const polarPoint = (angle, radius, center = 110) => ({
+  x: center + Math.cos(angle - Math.PI / 2) * radius,
+  y: center + Math.sin(angle - Math.PI / 2) * radius,
+});
+function donutPath(start, end) {
+  const outerStart = polarPoint(start, 92),
+    outerEnd = polarPoint(end, 92),
+    innerEnd = polarPoint(end, 54),
+    innerStart = polarPoint(start, 54),
+    large = end - start > Math.PI ? 1 : 0;
+  return `M${outerStart.x},${outerStart.y} A92,92 0 ${large},1 ${outerEnd.x},${outerEnd.y} L${innerEnd.x},${innerEnd.y} A54,54 0 ${large},0 ${innerStart.x},${innerStart.y} Z`;
+}
+function renderCategoryRanking() {
+  const data = state.summary;
+  if (!data) return;
+  const selected = state.selectedMasterCategoryId;
+  const rows = data.byCategory
+    .filter(
+      (row) =>
+        selected === null || masterKey(row.master_category_id) === selected,
+    )
+    .sort((a, b) => b.amount_minor - a.amount_minor);
+  const master = data.byMasterCategory.find(
+    (row) => masterKey(row.id) === selected,
+  );
+  $("#category-ranking-title").textContent = master
+    ? `${master.name} categories`
+    : selected === "unassigned"
+      ? "Unassigned categories"
+      : "All categories";
+  $("#clear-master-filter").hidden = selected === null;
+  const max = Math.max(1, ...rows.map((row) => Math.abs(row.amount_minor)));
+  $("#category-ranked-bars").innerHTML = rows.length
+    ? rows
+        .map((row, index) => {
+          const periodBudget =
+            Number(row.monthly_budget_minor ?? 0) * data.monthCount;
+          const remaining = periodBudget - row.amount_minor;
+          const count = Number(row.transaction_count ?? 0);
+          const average = count ? row.amount_minor / count : 0;
+          const refundMinor = Number(row.refund_minor ?? 0);
+          return `<article class="ranked-category-row ${row.amount_minor < 0 ? "is-refund-total" : ""}" tabindex="0"><span class="rank-number">${index + 1}</span><div class="ranked-category-main"><div class="ranked-category-label"><strong>${escapeHtml(row.name)}</strong><span>${money.format(dollars(row.amount_minor))}</span></div><div class="ranked-track"><span style="width:${Math.max(2, (Math.abs(row.amount_minor) / max) * 100)}%"></span></div></div><div class="category-tooltip" role="tooltip"><strong>${escapeHtml(row.name)}</strong><span>Net actual: ${money.format(dollars(row.amount_minor))}</span><span>Budget: ${periodBudget ? money.format(dollars(periodBudget)) : "Not set"}</span><span>${periodBudget ? `${remaining < 0 ? "Over" : "Remaining"}: ${money.format(dollars(Math.abs(remaining)))}` : ""}</span><span>${count} transaction${count === 1 ? "" : "s"} · Average ${money.format(dollars(average))}</span><span>${refundMinor ? `Refunds: ${money.format(dollars(refundMinor))}` : "No refunds in this range"}</span></div></article>`;
+        })
+        .join("")
+    : '<div class="empty">No categories belong to this master category in the selected range.</div>';
+}
+function renderSpendingBreakdown() {
+  const data = state.summary;
+  if (!data) return;
+  const rows = data.byMasterCategory.map((row) => ({
+    ...row,
+    key: masterKey(row.id),
+    positiveMinor: Math.max(0, Number(row.amount_minor)),
+  }));
+  const total = rows.reduce((sum, row) => sum + row.positiveMinor, 0);
+  let angle = 0;
+  const paths = rows
+    .filter((row) => row.positiveMinor > 0)
+    .map((row, index) => {
+      const start = angle;
+      angle += (row.positiveMinor / Math.max(1, total)) * Math.PI * 2;
+      const drawableEnd =
+        angle - start >= Math.PI * 2 - 0.0001 ? angle - 0.0001 : angle;
+      const share = Math.round((row.positiveMinor / Math.max(1, total)) * 100);
+      const selected = state.selectedMasterCategoryId === row.key;
+      return `<path class="donut-slice ${selected ? "selected" : ""}" d="${donutPath(start, drawableEnd)}" fill="${chartColors[index % chartColors.length]}" data-master-id="${escapeHtml(row.key)}" tabindex="0" role="button" aria-label="Filter to ${escapeHtml(row.name)}, ${share} percent, ${money.format(dollars(row.amount_minor))}"><title>${escapeHtml(row.name)}\n${money.format(dollars(row.amount_minor))} · ${share}%\n${Number(row.transaction_count ?? 0)} transactions${Number(row.refund_minor ?? 0) ? `\nRefunds ${money.format(dollars(row.refund_minor))}` : ""}</title></path>`;
+    })
+    .join("");
+  const selectedRow = rows.find(
+    (row) => row.key === state.selectedMasterCategoryId,
+  );
+  $("#master-category-donut").innerHTML = total
+    ? `<svg viewBox="0 0 220 220" role="img" aria-label="Master category spending donut">${paths}<circle class="donut-center" cx="110" cy="110" r="47"/><text class="donut-center-label" x="110" y="101">${selectedRow ? escapeHtml(selectedRow.name) : "Expenses"}</text><text class="donut-center-value" x="110" y="124">${money.format(dollars(selectedRow?.amount_minor ?? data.expenseMinor))}</text></svg>`
+    : '<div class="empty">No positive expense activity in this range.</div>';
+  $("#master-category-legend").innerHTML = rows.length
+    ? rows
+        .map((row, index) => {
+          const selected = state.selectedMasterCategoryId === row.key;
+          return `<button class="donut-legend-item ${selected ? "selected" : ""}" data-master-id="${escapeHtml(row.key)}" aria-pressed="${selected}"><i style="background:${chartColors[index % chartColors.length]}"></i><span>${escapeHtml(row.name)}</span><strong>${money.format(dollars(row.amount_minor))}</strong></button>`;
+        })
+        .join("")
+    : "";
+  renderCategoryRanking();
+}
+function selectMasterCategory(value) {
+  state.selectedMasterCategoryId =
+    state.selectedMasterCategoryId === value ? null : value;
+  renderSpendingBreakdown();
 }
 async function loadSummary() {
   const range = new URLSearchParams({
@@ -277,6 +421,14 @@ async function loadSummary() {
   });
   const result = await api(`/api/v1/monthly-summary?${range}`);
   const data = result.data;
+  state.summary = data;
+  if (
+    state.selectedMasterCategoryId !== null &&
+    !data.byMasterCategory.some(
+      (row) => masterKey(row.id) === state.selectedMasterCategoryId,
+    )
+  )
+    state.selectedMasterCategoryId = null;
   $("#income-total").textContent = money.format(dollars(data.incomeMinor));
   $("#expense-total").textContent = money.format(dollars(data.expenseMinor));
   $("#cashflow-total").textContent = money.format(
@@ -293,17 +445,7 @@ async function loadSummary() {
   );
   $("#month-comparison").textContent =
     `Showing ${data.startDate} through ${data.endDate} (${data.monthCount} budget month${data.monthCount === 1 ? "" : "s"}).`;
-  drawBars(
-    "#master-category-bars",
-    data.byMasterCategory.map((row) => ({
-      ...row,
-      amountMinor: row.amount_minor,
-    })),
-  );
-  drawBars(
-    "#category-bars",
-    data.byCategory.map((row) => ({ ...row, amountMinor: row.amount_minor })),
-  );
+  renderSpendingBreakdown();
   drawBars(
     "#account-bars",
     data.byAccount.map((row) => ({ ...row, amountMinor: row.amount_minor })),
@@ -471,6 +613,7 @@ async function loadNetWorth() {
         .join("")
     : '<div class="empty">No planned purchases.</div>';
   const points = timeline.data.points;
+  state.netWorthTimeline = timeline.data;
   if (!points.length) {
     $("#projection-chart").innerHTML =
       '<div class="empty">No timeline points in this range.</div>';
@@ -562,6 +705,182 @@ async function loadNetWorth() {
     .join("");
   $("#projection-chart").innerHTML =
     `<div class="chart-scroll"><svg viewBox="0 0 1200 470" role="img" aria-label="Monthly historical and projected fixed and liquid net worth">${grid}${monthMarks}<line class="zero-line" x1="${plot.left}" y1="${y(0)}" x2="${plot.right}" y2="${y(0)}"/><path class="fixed-area" d="${line(points, "fixedNetWorthMinor")} L${plot.right},${y(0)} L${plot.left},${y(0)} Z"/><path class="liquid-area" d="${area}"/><path class="fixed-line actual-line" d="${line(actual, "fixedNetWorthMinor")}"/><path class="total-line actual-line" d="${line(actual, "netWorthMinor")}"/><path class="fixed-line projected-line" d="${line(projected, "fixedNetWorthMinor")}"/><path class="total-line projected-line" d="${line(projected, "netWorthMinor")}"/>${todayX === null ? "" : `<line class="today-line" x1="${todayX}" y1="${plot.top}" x2="${todayX}" y2="${plot.bottom}"/><text class="today-label" x="${Math.min(plot.right - 45, todayX + 8)}" y="${plot.top + 15}">Today</text>`}</svg></div><div class="chart-values"><span>Start: fixed ${money.format(dollars(fixed[0]))}, liquid ${money.format(dollars(points[0].liquidNetWorthMinor))}</span><span>End: fixed ${money.format(dollars(fixed.at(-1)))}, liquid ${money.format(dollars(points.at(-1).liquidNetWorthMinor))}</span></div>`;
+  state.netWorthLiquidityMarkup = $("#projection-chart").innerHTML;
+  initializeNetWorthAccountSelection();
+  renderNetWorthAccountControls();
+  setNetWorthMode(state.netWorthMode);
+}
+
+function timelineAccounts() {
+  const seen = new Map();
+  for (const point of state.netWorthTimeline?.points ?? [])
+    for (const account of point.accounts ?? [])
+      if (!seen.has(account.id)) seen.set(account.id, account);
+  return [...seen.values()];
+}
+function initializeNetWorthAccountSelection() {
+  const ids = new Set(timelineAccounts().map((account) => account.id));
+  state.selectedNetWorthAccounts = new Set(
+    [...state.selectedNetWorthAccounts].filter((id) => ids.has(id)),
+  );
+  if (!state.netWorthSelectionInitialized) {
+    state.selectedNetWorthAccounts = ids;
+    state.netWorthSelectionInitialized = true;
+  }
+}
+function renderNetWorthAccountControls() {
+  const accounts = timelineAccounts();
+  $("#networth-account-toggles").innerHTML = accounts
+    .map((account, index) => {
+      const checked = state.selectedNetWorthAccounts.has(account.id);
+      return `<label class="account-toggle"><input type="checkbox" data-networth-account="${escapeHtml(account.id)}" ${checked ? "checked" : ""}/><i style="background:${chartColors[index % chartColors.length]}"></i><span>${escapeHtml(account.name)}</span></label>`;
+    })
+    .join("");
+}
+function accountBalance(point, accountId) {
+  return (
+    point.accounts?.find((account) => account.id === accountId)?.balanceMinor ??
+    0
+  );
+}
+function showNetWorthAccountDetail(accountId, pointIndex) {
+  const timeline = state.netWorthTimeline,
+    points = timeline?.points ?? [],
+    account = timelineAccounts().find((item) => item.id === accountId),
+    point = points[pointIndex];
+  if (!account || !point) return;
+  const value = accountBalance(point, accountId),
+    previous = pointIndex
+      ? accountBalance(points[pointIndex - 1], accountId)
+      : value,
+    first = accountBalance(points[0], accountId),
+    monthlyChange = value - previous,
+    rangeChange = value - first;
+  const change = (amount) =>
+    `${amount > 0 ? "+" : amount < 0 ? "−" : ""}${money.format(Math.abs(dollars(amount)))}`;
+  const detail = $("#networth-account-detail");
+  detail.innerHTML = `<div><span>${escapeHtml(account.name)}</span><strong>${money.format(dollars(value))}</strong></div><dl><div><dt>Date</dt><dd>${escapeHtml(point.date)} · ${escapeHtml(point.phase)}</dd></div><div><dt>Account</dt><dd>${escapeHtml(account.accountType.replaceAll("_", " "))} · ${escapeHtml(account.liquidityClass)}</dd></div><div><dt>Change from prior point</dt><dd class="${monthlyChange < 0 ? "negative" : "positive"}">${change(monthlyChange)}</dd></div><div><dt>Change across selected range</dt><dd class="${rangeChange < 0 ? "negative" : "positive"}">${change(rangeChange)}</dd></div></dl>`;
+  detail.hidden = false;
+}
+function renderAccountNetWorthChart() {
+  const timeline = state.netWorthTimeline,
+    points = timeline?.points ?? [],
+    accounts = timelineAccounts().filter((account) =>
+      state.selectedNetWorthAccounts.has(account.id),
+    );
+  if (!points.length || !accounts.length) {
+    $("#projection-chart").innerHTML =
+      '<div class="empty">Select one or more accounts to draw the account breakdown.</div>';
+    $("#networth-account-detail").hidden = true;
+    return;
+  }
+  const layers = accounts.map((account) => ({ account, lower: [], upper: [] })),
+    totals = [];
+  points.forEach((point, pointIndex) => {
+    let positive = 0,
+      negative = 0;
+    layers.forEach((layer) => {
+      const value = accountBalance(point, layer.account.id);
+      if (value >= 0) {
+        layer.lower[pointIndex] = positive;
+        positive += value;
+        layer.upper[pointIndex] = positive;
+      } else {
+        layer.lower[pointIndex] = negative;
+        negative += value;
+        layer.upper[pointIndex] = negative;
+      }
+    });
+    totals.push(positive + negative);
+  });
+  const bounds = layers.flatMap((layer) => [...layer.lower, ...layer.upper]),
+    rawMin = Math.min(0, ...bounds, ...totals),
+    rawMax = Math.max(1, ...bounds, ...totals),
+    padding = Math.max(100, (rawMax - rawMin) * 0.12),
+    min = rawMin - padding,
+    max = rawMax + padding,
+    plot = { left: 84, right: 1180, top: 28, bottom: 390 },
+    x = (index) =>
+      plot.left +
+      (index / Math.max(1, points.length - 1)) * (plot.right - plot.left),
+    y = (value) =>
+      plot.bottom - ((value - min) / (max - min)) * (plot.bottom - plot.top),
+    currencyLabel = (minor) =>
+      new Intl.NumberFormat("en-CA", {
+        style: "currency",
+        currency: "CAD",
+        maximumFractionDigits: 0,
+        notation: Math.abs(minor) >= 100_000_000 ? "compact" : "standard",
+      }).format(dollars(minor)),
+    monthLabel = (date) =>
+      new Intl.DateTimeFormat("en-CA", {
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(new Date(`${date}T00:00:00Z`));
+  const path = (values) =>
+    values
+      .map((value, index) => `${index ? "L" : "M"}${x(index)},${y(value)}`)
+      .join(" ");
+  const areas = layers
+    .map((layer, index) => {
+      const area = `${path(layer.upper)} ${layer.lower
+        .slice()
+        .reverse()
+        .map((value, reverseIndex) => {
+          const pointIndex = layer.lower.length - reverseIndex - 1;
+          return `L${x(pointIndex)},${y(value)}`;
+        })
+        .join(" ")} Z`;
+      const hoverPoints = points
+        .map((point, pointIndex) => {
+          const value = accountBalance(point, layer.account.id);
+          return `<circle class="account-hover-target" data-account-id="${escapeHtml(layer.account.id)}" data-point-index="${pointIndex}" cx="${x(pointIndex)}" cy="${y(layer.upper[pointIndex])}" r="9" tabindex="0"><title>${escapeHtml(layer.account.name)}\n${point.date}: ${money.format(dollars(value))}</title></circle>`;
+        })
+        .join("");
+      return `<g class="account-layer"><path d="${area}" style="fill:${chartColors[index % chartColors.length]};opacity:.58"><title>${escapeHtml(layer.account.name)}</title></path>${hoverPoints}</g>`;
+    })
+    .join("");
+  const tickValues = Array.from(
+      { length: 6 },
+      (_, index) => min + ((max - min) * index) / 5,
+    ),
+    grid = tickValues
+      .map(
+        (value) =>
+          `<line class="chart-grid" x1="${plot.left}" y1="${y(value)}" x2="${plot.right}" y2="${y(value)}"/><text class="axis-label y-axis-label" x="${plot.left - 10}" y="${y(value) + 4}">${currencyLabel(value)}</text>`,
+      )
+      .join(""),
+    labelStep = Math.max(1, Math.ceil(points.length / 18)),
+    months = points
+      .map((point, index) =>
+        index % labelStep === 0 || index === points.length - 1
+          ? `<text class="axis-label month-label" transform="translate(${x(index)},${plot.bottom + 17}) rotate(-38)">${monthLabel(point.date)}</text>`
+          : "",
+      )
+      .join(""),
+    totalLine = path(totals),
+    todayIndex = points.findIndex((point) => point.date === timeline.today),
+    todayLine =
+      todayIndex < 0
+        ? ""
+        : `<line class="today-line" x1="${x(todayIndex)}" y1="${plot.top}" x2="${x(todayIndex)}" y2="${plot.bottom}"/><text class="today-label" x="${Math.min(plot.right - 45, x(todayIndex) + 8)}" y="${plot.top + 15}">Today</text>`;
+  $("#projection-chart").innerHTML =
+    `<div class="chart-scroll"><svg viewBox="0 0 1200 470" role="img" aria-label="Stacked account balance history and projection">${grid}${areas}<line class="zero-line" x1="${plot.left}" y1="${y(0)}" x2="${plot.right}" y2="${y(0)}"/><path class="account-total-line" d="${totalLine}"/>${todayLine}${months}</svg></div><div class="chart-values"><span>${accounts.length} account${accounts.length === 1 ? "" : "s"} selected</span><span>Selected total: ${money.format(dollars(totals.at(-1)))}</span></div>`;
+  showNetWorthAccountDetail(accounts[0].id, points.length - 1);
+}
+function setNetWorthMode(mode) {
+  state.netWorthMode = mode;
+  $$(".networth-mode").forEach((button) => {
+    const active = button.dataset.networthMode === mode;
+    button.classList.toggle("secondary", !active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  $("#networth-liquidity-legend").hidden = mode !== "liquidity";
+  $("#networth-account-controls").hidden = mode !== "accounts";
+  $("#networth-account-detail").hidden = mode !== "accounts";
+  if (mode === "accounts") renderAccountNetWorthChart();
+  else $("#projection-chart").innerHTML = state.netWorthLiquidityMarkup;
 }
 
 async function showView() {
@@ -572,6 +891,7 @@ async function showView() {
   $$(".topbar nav a").forEach((link) =>
     link.classList.toggle("active", link.hash === `#${id}`),
   );
+  if (mobileNavigation()) setMobileNavigation(false);
   await run(async () => {
     if (id === "transactions") await loadTransactions();
     if (id === "spending") await loadSummary();
@@ -644,15 +964,46 @@ function inferImportType(amount, vendor) {
     return "transfer";
   return amount < 0 ? "expense" : "income";
 }
+function inferImportDirection(amount) {
+  return amount >= 0 ? "credit" : "debit";
+}
+function directionOptions(selected) {
+  return `<option value="debit" ${selected === "debit" ? "selected" : ""}>− Money out</option><option value="credit" ${selected === "credit" ? "selected" : ""}>+ Money in / refund</option>`;
+}
+function updateDirectionLabels() {
+  const form = $("#transaction-form"),
+    type = form.elements.transactionType.value;
+  const labels = {
+    expense: [
+      "− Money out",
+      "Purchase or charge",
+      "+ Money in",
+      "Refund or credit",
+    ],
+    income: ["− Money out", "Income reversal", "+ Money in", "Income received"],
+    transfer: ["− Money out", "Transfer out", "+ Money in", "Transfer in"],
+    adjustment: [
+      "− Money out",
+      "Decrease balance",
+      "+ Money in",
+      "Increase balance",
+    ],
+  }[type];
+  $("#debit-direction-title").textContent = labels[0];
+  $("#debit-direction-help").textContent = labels[1];
+  $("#credit-direction-title").textContent = labels[2];
+  $("#credit-direction-help").textContent = labels[3];
+}
 function renderImportPreview() {
   const [headers, ...rows] = state.csv.rows;
   const index = importMapping(headers);
   $("#import-preview").innerHTML =
-    `<table class="import-table"><thead><tr><th>Include</th><th>Date</th><th>Vendor</th><th>Amount</th><th>Type</th><th>Category</th><th>Optional description</th></tr></thead><tbody>${rows
+    `<table class="import-table"><thead><tr><th>Include</th><th>Date</th><th>Vendor</th><th>Amount</th><th>Type</th><th>+/−</th><th>Category</th><th>Optional description</th></tr></thead><tbody>${rows
       .map((row, i) => {
         const amount = importRowAmount(row, index);
         const vendor = row[index.vendor] ?? "";
         const type = inferImportType(amount, vendor);
+        const direction = inferImportDirection(amount);
         const matching = state.categories.filter(
           (category) => category.active !== 0 && category.kind === type,
         );
@@ -666,7 +1017,7 @@ function renderImportPreview() {
         const selectedCategory = matching.some((item) => item.id === suggested)
           ? suggested
           : fallback;
-        return `<tr><td><input type="checkbox" data-import-row="${i}" checked /></td><td>${escapeHtml(row[index.date] ?? "")}</td><td>${escapeHtml(vendor)}</td><td>${Number.isFinite(amount) ? money.format(Math.abs(amount)) : "Invalid amount"}</td><td><select data-import-type="${i}">${["expense", "income", "transfer", "adjustment"].map((value) => `<option ${value === type ? "selected" : ""}>${value}</option>`).join("")}</select></td><td><select data-import-category="${i}" required><option value="">Choose category</option>${optionList(matching, selectedCategory)}</select></td><td><input data-import-description="${i}" maxlength="500" placeholder="Optional" /></td></tr>`;
+        return `<tr><td><input type="checkbox" data-import-row="${i}" checked /></td><td>${escapeHtml(row[index.date] ?? "")}</td><td>${escapeHtml(vendor)}</td><td>${Number.isFinite(amount) ? money.format(Math.abs(amount)) : "Invalid amount"}</td><td><select data-import-type="${i}">${["expense", "income", "transfer", "adjustment"].map((value) => `<option ${value === type ? "selected" : ""}>${value}</option>`).join("")}</select></td><td><select data-import-direction="${i}">${directionOptions(direction)}</select></td><td><select data-import-category="${i}" required><option value="">Choose category</option>${optionList(matching, selectedCategory)}</select></td><td><input data-import-description="${i}" maxlength="500" placeholder="Optional" /></td></tr>`;
       })
       .join("")}</tbody></table>`;
   $("#import-submit").disabled =
@@ -700,14 +1051,71 @@ async function loadImportSuggestions() {
 }
 
 document.addEventListener("click", (event) => {
+  const masterTarget = event.target.closest?.("[data-master-id]");
+  if (masterTarget) {
+    selectMasterCategory(masterTarget.dataset.masterId);
+    return;
+  }
   const target = event.target.closest("button");
   if (!target) return;
+  if (target.id === "clear-master-filter") {
+    state.selectedMasterCategoryId = null;
+    renderSpendingBreakdown();
+    return;
+  }
+  if (target.id === "nav-toggle") {
+    if (mobileNavigation()) setMobileNavigation(false);
+    else {
+      const collapsed = !document.body.classList.contains("nav-collapsed");
+      setNavigationCollapsed(collapsed);
+      try {
+        window.localStorage.setItem(NAV_STORAGE_KEY, String(collapsed));
+      } catch {
+        // The menu still works when storage is unavailable.
+      }
+    }
+    return;
+  }
+  if (target.id === "mobile-nav-toggle") {
+    setMobileNavigation(!document.body.classList.contains("nav-open"));
+    return;
+  }
+  if (target.id === "sidebar-backdrop") {
+    setMobileNavigation(false);
+    return;
+  }
+  if (target.dataset.networthMode) {
+    setNetWorthMode(target.dataset.networthMode);
+    return;
+  }
+  if (target.dataset.accountSelection) {
+    const accounts = timelineAccounts();
+    state.selectedNetWorthAccounts = new Set(
+      accounts
+        .filter((account) => {
+          if (target.dataset.accountSelection === "all") return true;
+          if (target.dataset.accountSelection === "none") return false;
+          const liability = ["liability", "credit_card"].includes(
+            account.accountType,
+          );
+          return target.dataset.accountSelection === "liabilities"
+            ? liability
+            : !liability;
+        })
+        .map((account) => account.id),
+    );
+    renderNetWorthAccountControls();
+    renderAccountNetWorthChart();
+    return;
+  }
   if (target.dataset.dialog) {
     const dialog = $(`#${target.dataset.dialog}`);
     if (target.dataset.dialog === "transaction-dialog") {
       $("#transaction-form").reset();
       $("#transaction-form").elements.id.value = "";
       $("#transaction-form").transactionDate.value = today();
+      $("#transaction-title").textContent = "Add transaction";
+      updateDirectionLabels();
     }
     if (target.dataset.dialog === "account-dialog") {
       $("#account-form").reset();
@@ -733,6 +1141,9 @@ document.addEventListener("click", (event) => {
     form.amount.value = dollars(item.amountMinor);
     form.categoryId.value = item.categoryId;
     form.accountId.value = item.accountId;
+    form.elements.transactionDirection.value =
+      item.transactionDirection ?? "debit";
+    updateDirectionLabels();
     $("#transaction-title").textContent = "Edit transaction";
     $("#transaction-dialog").showModal();
   }
@@ -813,6 +1224,17 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  const accountToggle = event.target.closest?.("[data-networth-account]");
+  if (accountToggle) {
+    if (accountToggle.checked)
+      state.selectedNetWorthAccounts.add(accountToggle.dataset.networthAccount);
+    else
+      state.selectedNetWorthAccounts.delete(
+        accountToggle.dataset.networthAccount,
+      );
+    renderAccountNetWorthChart();
+    return;
+  }
   const assignment = event.target.closest(".master-category-assignment");
   if (assignment) {
     void run(async () => {
@@ -825,6 +1247,13 @@ document.addEventListener("change", (event) => {
       );
       notify("Master category assignment saved.");
     });
+    return;
+  }
+  if (event.target.matches("#transaction-form [name='transactionType']")) {
+    const form = $("#transaction-form");
+    form.elements.transactionDirection.value =
+      event.target.value === "income" ? "credit" : "debit";
+    updateDirectionLabels();
     return;
   }
   const typeSelect = event.target.closest("[data-import-type]");
@@ -841,6 +1270,23 @@ document.addEventListener("change", (event) => {
   categorySelect.innerHTML = `<option value="">Choose category</option>${optionList(matching, fallback)}`;
 });
 
+document.addEventListener("keydown", (event) => {
+  const target = event.target.closest?.(".donut-slice[data-master-id]");
+  if (target && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    selectMasterCategory(target.dataset.masterId);
+  }
+});
+for (const eventName of ["mouseover", "focusin", "click"])
+  document.addEventListener(eventName, (event) => {
+    const target = event.target.closest?.(".account-hover-target");
+    if (target)
+      showNetWorthAccountDetail(
+        target.dataset.accountId,
+        Number(target.dataset.pointIndex),
+      );
+  });
+
 $("#transaction-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const formElement = event.currentTarget;
@@ -850,6 +1296,7 @@ $("#transaction-form").addEventListener("submit", (event) => {
       body = {
         transactionDate: form.get("transactionDate"),
         transactionType: form.get("transactionType"),
+        transactionDirection: form.get("transactionDirection"),
         categoryId: form.get("categoryId"),
         accountId: form.get("accountId"),
         vendorName: form.get("vendorName"),
@@ -1080,17 +1527,22 @@ $("#import-form").addEventListener("submit", (event) => {
     const rows = sourceRows
       .filter((_, index) => selected.has(index))
       .map((row, filteredIndex) => {
-        const originalIndex = [...selected][filteredIndex];
+        const originalIndex = [...selected][filteredIndex],
+          rawAmount = importRowAmount(row, importIndex),
+          direction = $(`[data-import-direction="${originalIndex}"]`).value;
         return {
           transactionDate: row[key("date")],
           vendorName: row[key("vendor")],
           description: $(
             `[data-import-description="${originalIndex}"]`,
           ).value.trim(),
-          amountMinor: cents(Math.abs(importRowAmount(row, importIndex))),
-          balanceEffectMinor: cents(importRowAmount(row, importIndex)),
+          amountMinor: cents(Math.abs(rawAmount)),
+          balanceEffectMinor: cents(
+            Math.abs(rawAmount) * (direction === "credit" ? 1 : -1),
+          ),
           categoryId: $(`[data-import-category="${originalIndex}"]`).value,
           transactionType: $(`[data-import-type="${originalIndex}"]`).value,
+          transactionDirection: direction,
           currency: "CAD",
         };
       });

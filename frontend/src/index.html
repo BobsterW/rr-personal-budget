@@ -86,18 +86,56 @@
       </div>
     </section>
     <!-- All elements with app-shell are revealed together after authentication. -->
-    <header class="topbar app-shell" hidden>
-      <a class="brand" href="#transactions"><span>R&R</span> Budget</a>
+    <header id="app-sidebar" class="topbar app-shell" hidden>
+      <div class="sidebar-heading">
+        <button
+          id="nav-toggle"
+          class="nav-toggle secondary"
+          type="button"
+          aria-label="Collapse navigation"
+          aria-expanded="true"
+        >
+          ☰
+        </button>
+        <a class="brand" href="#transactions"><span>R&R</span><b>Budget</b></a>
+      </div>
       <nav aria-label="Primary">
-        <a href="#transactions">Transactions</a
-        ><a href="#spending">Monthly spending</a><a href="#budget">Budget</a
-        ><a href="#net-worth">Net worth</a><a href="#settings">Settings</a>
+        <a href="#transactions"
+          ><i aria-hidden="true">↕</i><span>Transactions</span></a
+        ><a href="#spending"
+          ><i aria-hidden="true">◔</i><span>Monthly spending</span></a
+        ><a href="#budget"><i aria-hidden="true">◎</i><span>Budget</span></a
+        ><a href="#net-worth"
+          ><i aria-hidden="true">⌁</i><span>Net worth</span></a
+        ><a href="#settings"
+          ><i aria-hidden="true">⚙</i><span>Settings</span></a
+        >
       </nav>
       <div class="user-menu">
-        <span id="current-username"></span
-        ><button id="logout" class="secondary">Sign out</button>
+        <span class="user-avatar" aria-hidden="true">●</span
+        ><span id="current-username"></span
+        ><button id="logout" class="secondary">
+          <span>Sign out</span><i aria-hidden="true">↪</i>
+        </button>
       </div>
     </header>
+    <button
+      id="mobile-nav-toggle"
+      class="mobile-nav-toggle secondary app-shell"
+      type="button"
+      aria-label="Open navigation"
+      aria-expanded="false"
+      hidden
+    >
+      ☰ <span>Menu</span>
+    </button>
+    <button
+      id="sidebar-backdrop"
+      class="sidebar-backdrop"
+      type="button"
+      aria-label="Close navigation"
+      hidden
+    ></button>
     <main class="app-shell" hidden>
       <div
         id="notice"
@@ -151,7 +189,7 @@
           ><button class="secondary" id="apply-filters">Apply filters</button>
         </div>
         <div class="panel table-wrap">
-          <table>
+          <table class="transactions-table">
             <thead>
               <tr>
                 <th>Date</th>
@@ -211,14 +249,28 @@
           </article>
         </div>
         <p id="month-comparison" class="fine-print"></p>
-        <div class="networth-stack">
-          <section class="panel">
-            <h2>By master category</h2>
-            <div id="master-category-bars" class="bars"></div>
+        <div class="spending-breakdown">
+          <section class="panel donut-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Spending mix</p>
+                <h2>Master categories</h2>
+              </div>
+              <button id="clear-master-filter" class="secondary compact" hidden>
+                Show all
+              </button>
+            </div>
+            <div id="master-category-donut" class="master-category-donut"></div>
+            <div id="master-category-legend" class="donut-legend"></div>
           </section>
-          <section class="panel">
-            <h2>By category</h2>
-            <div id="category-bars" class="bars"></div>
+          <section class="panel ranked-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Largest first</p>
+                <h2 id="category-ranking-title">All categories</h2>
+              </div>
+            </div>
+            <div id="category-ranked-bars" class="ranked-bars"></div>
           </section>
         </div>
         <section class="panel">
@@ -318,14 +370,68 @@
           </article>
         </div>
         <section class="panel networth-chart-panel">
-          <h2>Actual & projected net worth</h2>
-          <div class="chart-legend">
+          <div class="panel-heading networth-chart-heading">
+            <div>
+              <p class="eyebrow">History and forecast</p>
+              <h2>Actual & projected net worth</h2>
+            </div>
+            <div
+              class="chart-mode-toggle"
+              role="group"
+              aria-label="Net worth chart view"
+            >
+              <button
+                class="networth-mode"
+                data-networth-mode="liquidity"
+                aria-pressed="true"
+              >
+                Fixed / liquid
+              </button>
+              <button
+                class="networth-mode secondary"
+                data-networth-mode="accounts"
+                aria-pressed="false"
+              >
+                By account
+              </button>
+            </div>
+          </div>
+          <div id="networth-liquidity-legend" class="chart-legend">
             <span class="fixed-key">Fixed net worth</span
             ><span class="liquid-key"
               >Liquid net worth stacked above fixed</span
             >
           </div>
+          <div
+            id="networth-account-controls"
+            class="networth-account-controls"
+            hidden
+          >
+            <div class="account-filter-actions">
+              <button class="secondary compact" data-account-selection="all">
+                Select all
+              </button>
+              <button class="secondary compact" data-account-selection="assets">
+                Assets
+              </button>
+              <button
+                class="secondary compact"
+                data-account-selection="liabilities"
+              >
+                Liabilities
+              </button>
+              <button class="secondary compact" data-account-selection="none">
+                Clear
+              </button>
+            </div>
+            <div id="networth-account-toggles" class="account-toggles"></div>
+          </div>
           <div id="projection-chart" class="projection-chart"></div>
+          <div
+            id="networth-account-detail"
+            class="account-chart-detail"
+            hidden
+          ></div>
           <p class="fine-print">
             History uses balance snapshots plus transaction balance effects.
             Transfers without a known debit/credit direction are excluded.
@@ -495,7 +601,34 @@
               <option>transfer</option>
               <option>adjustment</option>
             </select></label
-          ><label>Category<select name="categoryId" required></select></label
+          >
+          <fieldset class="direction-field wide">
+            <legend>Money direction</legend>
+            <label class="direction-option">
+              <input
+                type="radio"
+                name="transactionDirection"
+                value="debit"
+                checked
+              />
+              <span
+                ><strong id="debit-direction-title">− Money out</strong
+                ><small id="debit-direction-help"
+                  >Purchase or charge</small
+                ></span
+              >
+            </label>
+            <label class="direction-option">
+              <input type="radio" name="transactionDirection" value="credit" />
+              <span
+                ><strong id="credit-direction-title">+ Money in</strong
+                ><small id="credit-direction-help"
+                  >Refund or credit</small
+                ></span
+              >
+            </label>
+          </fieldset>
+          <label>Category<select name="categoryId" required></select></label
           ><label>Account/card<select name="accountId" required></select></label
           ><label
             >Vendor<input name="vendorName" maxlength="120" required /></label
@@ -712,7 +845,7 @@
         </div>
       </form>
     </dialog>
-    <script src="config.js?v=7.4-mobile-auth-1"></script>
-    <script type="module" src="app.js?v=7.4-mobile-auth-1"></script>
+    <script src="config.js?v=7.5.0"></script>
+    <script type="module" src="app.js?v=7.5.0"></script>
   </body>
 </html>

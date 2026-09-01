@@ -1,6 +1,24 @@
-# R&R Budget v7.4
+# R&R Budget v7.5
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.5 changes
+
+- Separates transaction type from money direction. Expenses can now be debits
+  (purchases) or credits (refunds), and refunds reduce category spending,
+  budgets, trends, and account balance effects.
+- Adds the same debit/credit choice to CSV previews and infers it from signed
+  amount or separate debit/credit columns.
+- Replaces the master/category lists with an interactive master-category donut
+  and ranked category bars. Selecting a donut slice filters the ranking.
+- Adds a fixed/liquid versus by-account toggle to the net-worth timeline. Each
+  account can be shown or hidden, assets/liabilities can be selected together,
+  and hover/focus details show the dated balance and changes.
+- Replaces the horizontal navigation with a collapsible desktop sidebar and a
+  mobile slide-over menu. Mobile transaction tables become readable cards and
+  all new charts fit without horizontal page scrolling.
+- Adds migration `0008_transaction_direction.sql`; V7.4 remains unchanged in
+  its separate directory.
 
 ## V7.4 changes
 
@@ -37,7 +55,7 @@ A private, multi-user budget and net-worth application inspired by `R&R Expenses
 - `database/`: forward-only Cloudflare D1 migrations and invented development seeds
 - `.github/workflows/`: pull-request checks and main-branch production deployment
 
-The browser calls the Worker with credentialed `fetch` requests. Only the Worker can access D1. V7.1 includes bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
+The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.5 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
 
 For a detailed, file-by-file explanation, read [`CODE_WALKTHROUGH.md`](CODE_WALKTHROUGH.md).
 
@@ -68,11 +86,18 @@ The workbook contained broken and Excel-version-sensitive formulas. The app does
 ## Financial conventions
 
 - Base currency: CAD.
-- Amounts are positive integer cents. `transaction_type` determines whether an amount is income, expense, transfer, or adjustment.
+- Amounts are positive integer cents. `transaction_type` identifies income,
+  expense, transfer, or adjustment; `transaction_direction` records whether
+  money left (`debit`) or entered (`credit`) the account. An expense credit is
+  a refund and reduces net expenses without being misclassified as income.
 - Transfers are excluded from income and expense totals.
 - Liability balance snapshots are negative; the projection converts their magnitude to a positive liability total.
 - Dates use `YYYY-MM-DD`. Calendar-month selection uses the `America/Edmonton` timezone in the frontend.
-- Projection: each account uses fixed/liquid classification plus its own growth, interest, payment frequency, equity gain, dividends, and depreciation settings. The stacked chart separates fixed net worth from liquid net worth. The overall plan also receives `monthly income - monthly expenses + additional savings`. It is a planning estimate, not financial advice.
+- Projection: each account uses fixed/liquid classification plus its payment,
+  interest, equity, and dividend settings. The timeline can show either stacked
+  fixed/liquid net worth or individual account layers. The overall plan also
+  receives `monthly income - monthly expenses + additional savings`. It is a
+  planning estimate, not financial advice.
 - The full-width timeline displays monthly currency values, gridlines, tooltips, historical/projected styling, and a today marker.
 - Historical net worth starts from dated account balance snapshots and applies each transaction's signed balance effect. Expenses reduce balances and income raises balances. Imported debit/credit signs are preserved; legacy transfers with no known direction are excluded rather than guessed.
 - Future purchases reduce the selected account on their planned date. The timeline uses solid historical lines, dashed projected lines, and a vertical marker for today.
@@ -144,7 +169,7 @@ All routes except health, registration, login, and logout require a valid sessio
 
 ## CSV import
 
-The frontend accepts general CSV files, the tested Neo Mastercard export format (`Transaction Date`, `Posted Date`, `Status`, `Description`, `Amount`), and headerless CIBC exports (`date, description, debit, credit`). It safely parses quoted fields, maps amount or separate debit/credit columns, and previews every row. Files over 500 rows are transparently sent in safe 500-row API batches. Every included row has an editable type, required category, and optional description. Categories are suggested in priority order from user rules, normalized exact merchant history, similar merchant history, and expanded merchant-keyword groups. Normalization removes common payment noise and long reference numbers, and similar merchants use token overlap with a confidence threshold. Unmatched rows use the appropriate Uncategorized category. Dates must be ISO `YYYY-MM-DD`; only CAD is accepted.
+The frontend accepts general CSV files, the tested Neo Mastercard export format (`Transaction Date`, `Posted Date`, `Status`, `Description`, `Amount`), and headerless CIBC exports (`date, description, debit, credit`). It safely parses quoted fields, maps amount or separate debit/credit columns, and previews every row. Files over 500 rows are transparently sent in safe 500-row API batches. Every included row has an editable type, debit/credit direction, required category, and optional description. Categories are suggested in priority order from user rules, normalized exact merchant history, similar merchant history, and expanded merchant-keyword groups. Normalization removes common payment noise and long reference numbers, and similar merchants use token overlap with a confidence threshold. Unmatched rows use the appropriate Uncategorized category. Dates must be ISO `YYYY-MM-DD`; only CAD is accepted.
 
 The included `test/fixtures/mastercard-sample.csv` is invented. Never commit real exports. Direct bank connectivity is intentionally excluded until a vetted provider and consent model are approved.
 
@@ -163,7 +188,7 @@ Do these steps only after reviewing the local application.
 
 V6 has application-level accounts. Sessions use `HttpOnly`, `SameSite`, and production `Secure` cookie attributes; modifying requests reject unapproved browser origins. Prefer a custom domain that serves the frontend and `/api` on the same site. Cloudflare Access may still be added as defense in depth, but it is no longer the only authentication layer.
 
-Set the GitHub environment variable `FRONTEND_ORIGIN` to the exact Pages/custom origin (for example `https://budget.example.com`). The deployment workflow inserts it into the Worker CORS allowlist. Set `WORKER_API_URL` to the deployed API URL. Do not include trailing slashes in either value.
+Set the GitHub environment variable `FRONTEND_ORIGIN` to the exact Pages/custom origin (for example `https://rr-budget.pages.dev`). The deployment workflow inserts it into the Worker CORS allowlist. Do not include a trailing slash. The same-origin Pages gateway in `frontend/functions/api/[[path]].js` contains the deployed Worker origin; update that constant only if the Worker name or account subdomain changes.
 
 For a public deployment, also add Cloudflare Turnstile to registration and repeated failed logins, configure rate limiting at the edge, and plan password recovery before inviting users who cannot be supported manually.
 
@@ -173,12 +198,12 @@ Push this repository to GitHub on a `codex/` feature branch and open a pull requ
 
 Configure GitHub:
 
-| Name                       | Kind     | Purpose                                                     |
-| -------------------------- | -------- | ----------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`     | Secret   | Least-privilege token for the Worker, D1, and Pages project |
-| `CLOUDFLARE_ACCOUNT_ID`    | Secret   | Cloudflare account identifier                               |
-| `WORKER_API_URL`           | Variable | Deployed API origin, without trailing slash                 |
-| `CLOUDFLARE_PAGES_PROJECT` | Variable | Pages project name, for example `rr-budget`                 |
+| Name                       | Kind     | Purpose                                                       |
+| -------------------------- | -------- | ------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`     | Secret   | Least-privilege token for the Worker, D1, and Pages project   |
+| `CLOUDFLARE_ACCOUNT_ID`    | Secret   | Cloudflare account identifier                                 |
+| `FRONTEND_ORIGIN`          | Variable | Exact Pages origin, for example `https://rr-budget.pages.dev` |
+| `CLOUDFLARE_PAGES_PROJECT` | Variable | Pages project name, for example `rr-budget`                   |
 
 Update `ALLOWED_ORIGINS` in `worker/wrangler.jsonc` with the production Pages origin before deploying. Protect the GitHub `production` environment and require review if desired. For stricter least privilege, use separate API tokens for D1/Worker and Pages and split the workflow secrets.
 
@@ -203,5 +228,5 @@ Update `ALLOWED_ORIGINS` in `worker/wrangler.jsonc` with the production Pages or
 - Single currency (CAD); multiple isolated users are supported.
 - Direct Mastercard/bank API connections are not included.
 - CSV dates require ISO format in this first version.
-- Historical comparison and category budget variance are schema-ready but the initial UI focuses on current-month totals.
+- Spending analytics and budget variance support user-selected date ranges.
 - The projection is intentionally simpler than the workbook's cattle-specific investment model.

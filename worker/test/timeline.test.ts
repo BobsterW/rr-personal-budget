@@ -17,6 +17,7 @@ const assumptions = {
 const accounts: TimelineAccount[] = [
   {
     id: "cash",
+    name: "Cash",
     accountType: "chequing",
     liquidityClass: "liquid",
     annualGrowthBps: 0,
@@ -62,5 +63,10 @@ describe("net-worth timeline", () => {
       liquidNetWorthMinor: 75_000,
       netWorthMinor: 75_000,
     });
+    expect(points.at(-1)?.accounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "cash", balanceMinor: 75_000 }),
+      ]),
+    );
   });
 });

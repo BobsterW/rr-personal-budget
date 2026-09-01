@@ -6,6 +6,13 @@
  */
 import type { TransactionInput } from "./types";
 
+// Stored amounts stay positive. These static SQL expressions apply the
+// direction when calculating spending and income; no user input enters them.
+const EXPENSE_EFFECT_SQL =
+  "CASE WHEN t.transaction_direction='credit' THEN -t.amount_minor ELSE t.amount_minor END";
+const INCOME_EFFECT_SQL =
+  "CASE WHEN t.transaction_direction='debit' THEN -t.amount_minor ELSE t.amount_minor END";
+
 const NOISE_WORDS = new Set([
   "purchase",
   "retail",
@@ -60,9 +67,9 @@ export class BudgetRepository {
   // A signed effect lets historical net worth move forward/back from snapshots.
   private balanceEffect(input: TransactionInput): number | null {
     if (input.balanceEffectMinor !== undefined) return input.balanceEffectMinor;
-    if (input.transactionType === "expense") return -input.amountMinor;
-    if (input.transactionType === "income") return input.amountMinor;
-    return null;
+    return input.transactionDirection === "credit"
+      ? input.amountMinor
+      : -input.amountMinor;
   }
 
   async listLookup(table: "categories" | "accounts") {
@@ -560,7 +567,7 @@ export class BudgetRepository {
       now = new Date().toISOString();
     await this.db
       .prepare(
-        "INSERT INTO transactions (id,user_id,transaction_date,category_id,account_id,vendor_name,description,amount_minor,transaction_type,currency,import_id,import_fingerprint,balance_effect_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO transactions (id,user_id,transaction_date,category_id,account_id,vendor_name,description,amount_minor,transaction_type,transaction_direction,currency,import_id,import_fingerprint,balance_effect_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .bind(
         id,
@@ -572,6 +579,7 @@ export class BudgetRepository {
         input.description ?? "",
         input.amountMinor,
         input.transactionType,
+        input.transactionDirection,
         input.currency ?? "CAD",
         importId,
         input.importFingerprint ?? null,
@@ -586,7 +594,7 @@ export class BudgetRepository {
     const now = new Date().toISOString();
     const result = await this.db
       .prepare(
-        "UPDATE transactions SET transaction_date=?,category_id=?,account_id=?,vendor_name=?,description=?,amount_minor=?,transaction_type=?,currency=?,balance_effect_minor=?,updated_at=? WHERE id=? AND user_id=?",
+        "UPDATE transactions SET transaction_date=?,category_id=?,account_id=?,vendor_name=?,description=?,amount_minor=?,transaction_type=?,transaction_direction=?,currency=?,balance_effect_minor=?,updated_at=? WHERE id=? AND user_id=?",
       )
       .bind(
         input.transactionDate,
@@ -596,6 +604,7 @@ export class BudgetRepository {
         input.description ?? "",
         input.amountMinor,
         input.transactionType,
+        input.transactionDirection,
         input.currency ?? "CAD",
         this.balanceEffect(input),
         now,
@@ -616,25 +625,25 @@ export class BudgetRepository {
   async rangeSummary(startDate: string, endDate: string) {
     const totals = await this.db
       .prepare(
-        "SELECT SUM(CASE WHEN transaction_type='income' THEN amount_minor ELSE 0 END) income_minor,SUM(CASE WHEN transaction_type='expense' THEN amount_minor ELSE 0 END) expense_minor,SUM(CASE WHEN transaction_type NOT IN ('transfer') THEN 1 ELSE 0 END) transaction_count FROM transactions WHERE user_id=? AND transaction_date BETWEEN ? AND ?",
+        `SELECT SUM(CASE WHEN t.transaction_type='income' THEN ${INCOME_EFFECT_SQL} ELSE 0 END) income_minor,SUM(CASE WHEN t.transaction_type='expense' THEN ${EXPENSE_EFFECT_SQL} ELSE 0 END) expense_minor,SUM(CASE WHEN t.transaction_type NOT IN ('transfer') THEN 1 ELSE 0 END) transaction_count FROM transactions t WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ?`,
       )
       .bind(this.userId, startDate, endDate)
       .first<Record<string, number>>();
     const categories = await this.db
       .prepare(
-        "SELECT c.id,c.name,c.monthly_budget_minor,COALESCE(SUM(t.amount_minor),0) amount_minor,COUNT(t.id) transaction_count FROM categories c LEFT JOIN transactions t ON t.category_id=c.id AND t.user_id=c.user_id AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type='expense' WHERE c.user_id=? AND c.active=1 AND c.kind='expense' GROUP BY c.id,c.name,c.monthly_budget_minor ORDER BY amount_minor DESC,c.name",
+        `SELECT c.id,c.name,c.master_category_id,c.monthly_budget_minor,COALESCE(SUM(${EXPENSE_EFFECT_SQL}),0) amount_minor,COUNT(t.id) transaction_count,SUM(CASE WHEN t.transaction_direction='credit' THEN 1 ELSE 0 END) refund_count,COALESCE(SUM(CASE WHEN t.transaction_direction='credit' THEN t.amount_minor ELSE 0 END),0) refund_minor FROM categories c LEFT JOIN transactions t ON t.category_id=c.id AND t.user_id=c.user_id AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type='expense' WHERE c.user_id=? AND c.active=1 AND c.kind='expense' GROUP BY c.id,c.name,c.master_category_id,c.monthly_budget_minor ORDER BY amount_minor DESC,c.name`,
       )
       .bind(startDate, endDate, this.userId)
       .all();
     const accounts = await this.db
       .prepare(
-        "SELECT a.id,a.name,SUM(t.amount_minor) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type='expense' GROUP BY a.id,a.name ORDER BY amount_minor DESC",
+        `SELECT a.id,a.name,SUM(${EXPENSE_EFFECT_SQL}) amount_minor,COUNT(*) transaction_count,SUM(CASE WHEN t.transaction_direction='credit' THEN 1 ELSE 0 END) refund_count FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type='expense' GROUP BY a.id,a.name ORDER BY amount_minor DESC`,
       )
       .bind(this.userId, startDate, endDate)
       .all();
     const masterCategories = await this.db
       .prepare(
-        "SELECT COALESCE(mc.id,'unassigned') id,COALESCE(mc.name,'Unassigned') name,SUM(t.amount_minor) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type='expense' GROUP BY mc.id,mc.name ORDER BY amount_minor DESC",
+        `SELECT COALESCE(mc.id,'unassigned') id,COALESCE(mc.name,'Unassigned') name,SUM(${EXPENSE_EFFECT_SQL}) amount_minor,COUNT(*) transaction_count,SUM(CASE WHEN t.transaction_direction='credit' THEN 1 ELSE 0 END) refund_count,COALESCE(SUM(CASE WHEN t.transaction_direction='credit' THEN t.amount_minor ELSE 0 END),0) refund_minor FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type='expense' GROUP BY mc.id,mc.name ORDER BY amount_minor DESC`,
       )
       .bind(this.userId, startDate, endDate)
       .all();
@@ -708,7 +717,7 @@ export class BudgetRepository {
     }
     const actualRows = await this.db
       .prepare(
-        `SELECT substr(t.transaction_date,1,7) month,SUM(t.amount_minor) actual_minor FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id WHERE ${clauses.join(" AND ")} GROUP BY month ORDER BY month`,
+        `SELECT substr(t.transaction_date,1,7) month,SUM(${type === "expense" ? EXPENSE_EFFECT_SQL : INCOME_EFFECT_SQL}) actual_minor FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id WHERE ${clauses.join(" AND ")} GROUP BY month ORDER BY month`,
       )
       .bind(...bindings)
       .all<{ month: string; actual_minor: number }>();

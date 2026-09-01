@@ -1,6 +1,7 @@
 /* Shared domain contracts. Monetary values are integer cents and rates are
  * basis points, avoiding floating-point rounding in storage and calculations. */
 export type TransactionType = "expense" | "income" | "transfer" | "adjustment";
+export type TransactionDirection = "debit" | "credit";
 export type AccountType =
   | "cash"
   | "chequing"
@@ -18,6 +19,7 @@ export interface TransactionInput {
   description?: string;
   amountMinor: number;
   transactionType: TransactionType;
+  transactionDirection: TransactionDirection;
   currency?: string;
   importFingerprint?: string;
   balanceEffectMinor?: number | null;

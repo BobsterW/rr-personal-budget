@@ -722,6 +722,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const item = toCamel(row);
       return {
         id: String(item.id),
+        name: String(item.name),
         accountType: item.accountType as AccountType,
         liquidityClass: item.liquidityClass as LiquidityClass,
         annualGrowthBps: Number(item.annualGrowthBps),
@@ -956,12 +957,13 @@ async function route(request: Request, env: Env): Promise<Response> {
         validation.data.vendorName.toLowerCase(),
         validation.data.amountMinor,
         validation.data.transactionType,
+        validation.data.transactionDirection,
       ].join("|");
       validation.data.importFingerprint = await sha256(normalized);
       const id = crypto.randomUUID();
       statements.push(
         env.DB.prepare(
-          "INSERT OR IGNORE INTO transactions (id,user_id,transaction_date,category_id,account_id,vendor_name,description,amount_minor,transaction_type,currency,import_id,import_fingerprint,balance_effect_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT OR IGNORE INTO transactions (id,user_id,transaction_date,category_id,account_id,vendor_name,description,amount_minor,transaction_type,transaction_direction,currency,import_id,import_fingerprint,balance_effect_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         ).bind(
           id,
           user.id,
@@ -972,15 +974,14 @@ async function route(request: Request, env: Env): Promise<Response> {
           validation.data.description ?? "",
           validation.data.amountMinor,
           validation.data.transactionType,
+          validation.data.transactionDirection,
           env.BASE_CURRENCY,
           importId,
           validation.data.importFingerprint,
           validation.data.balanceEffectMinor ??
-            (validation.data.transactionType === "expense"
-              ? -validation.data.amountMinor
-              : validation.data.transactionType === "income"
-                ? validation.data.amountMinor
-                : null),
+            (validation.data.transactionDirection === "credit"
+              ? validation.data.amountMinor
+              : -validation.data.amountMinor),
           now,
           now,
         ),

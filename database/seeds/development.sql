@@ -21,10 +21,10 @@ INSERT OR IGNORE INTO accounts (id,user_id,name,account_type,active,created_at,u
 ('acct-demo-investment','user-demo','Demo Investment','investment',1,datetime('now'),datetime('now'),'liquid'),
 ('acct-demo-loan','user-demo','Demo Student Loan','liability',1,datetime('now'),datetime('now'),'fixed');
 
-INSERT OR IGNORE INTO transactions (id,user_id,transaction_date,category_id,account_id,vendor_name,description,amount_minor,transaction_type,currency,import_id,import_fingerprint,created_at,updated_at,balance_effect_minor) VALUES
-('txn-demo-1','user-demo','2026-06-03','cat-groceries','acct-demo-card','Sample Grocer','Invented seed transaction',8425,'expense','CAD',NULL,NULL,datetime('now'),datetime('now'),-8425),
-('txn-demo-2','user-demo','2026-06-14','cat-gas','acct-demo-card','Sample Fuel','Invented seed transaction',6270,'expense','CAD',NULL,NULL,datetime('now'),datetime('now'),-6270),
-('txn-demo-3','user-demo','2026-06-15','cat-work','acct-demo-chequing','Sample Employer','Invented seed transaction',250000,'income','CAD',NULL,NULL,datetime('now'),datetime('now'),250000);
+INSERT OR IGNORE INTO transactions (id,user_id,transaction_date,category_id,account_id,vendor_name,description,amount_minor,transaction_type,transaction_direction,currency,import_id,import_fingerprint,created_at,updated_at,balance_effect_minor) VALUES
+('txn-demo-1','user-demo','2026-06-03','cat-groceries','acct-demo-card','Sample Grocer','Invented seed transaction',8425,'expense','debit','CAD',NULL,NULL,datetime('now'),datetime('now'),-8425),
+('txn-demo-2','user-demo','2026-06-14','cat-gas','acct-demo-card','Sample Fuel','Invented seed transaction',6270,'expense','debit','CAD',NULL,NULL,datetime('now'),datetime('now'),-6270),
+('txn-demo-3','user-demo','2026-06-15','cat-work','acct-demo-chequing','Sample Employer','Invented seed transaction',250000,'income','credit','CAD',NULL,NULL,datetime('now'),datetime('now'),250000);
 
 INSERT OR IGNORE INTO balance_snapshots (id,user_id,account_id,snapshot_date,balance_minor,note,created_at,updated_at) VALUES
 ('bal-demo-1','user-demo','acct-demo-savings','2026-06-30',1500000,'Invented seed balance',datetime('now'),datetime('now')),

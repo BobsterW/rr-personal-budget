@@ -9,15 +9,57 @@ describe("monthly totals", () => {
   it("excludes transfers", () => {
     expect(
       monthlyTotals([
-        { transaction_type: "income", amount_minor: 200000 },
-        { transaction_type: "expense", amount_minor: 50000 },
-        { transaction_type: "transfer", amount_minor: 10000 },
+        {
+          transaction_type: "income",
+          transaction_direction: "credit",
+          amount_minor: 200000,
+        },
+        {
+          transaction_type: "expense",
+          transaction_direction: "debit",
+          amount_minor: 50000,
+        },
+        {
+          transaction_type: "transfer",
+          transaction_direction: "debit",
+          amount_minor: 10000,
+        },
       ]),
     ).toEqual({
       incomeMinor: 200000,
       expenseMinor: 50000,
       netCashFlowMinor: 150000,
       transactionCount: 2,
+    });
+  });
+  it("subtracts expense refunds and income reversals", () => {
+    expect(
+      monthlyTotals([
+        {
+          transaction_type: "expense",
+          transaction_direction: "debit",
+          amount_minor: 10_000,
+        },
+        {
+          transaction_type: "expense",
+          transaction_direction: "credit",
+          amount_minor: 10_000,
+        },
+        {
+          transaction_type: "income",
+          transaction_direction: "credit",
+          amount_minor: 20_000,
+        },
+        {
+          transaction_type: "income",
+          transaction_direction: "debit",
+          amount_minor: 5_000,
+        },
+      ]),
+    ).toMatchObject({
+      expenseMinor: 0,
+      incomeMinor: 15_000,
+      netCashFlowMinor: 15_000,
     });
   });
 });

@@ -1,5 +1,6 @@
 {
   "name": "rr-personal-budget",
+  "version": "7.5.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",

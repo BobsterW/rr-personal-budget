@@ -1,5 +1,6 @@
 {
   "name": "@rr-budget/frontend",
+  "version": "7.5.0",
   "private": true,
   "type": "module",
   "scripts": {

@@ -1,4 +1,4 @@
-# V7.1 code walkthrough
+# V7.5 code walkthrough
 
 This guide explains how the application works from the browser down to Cloudflare D1. Read it beside the source files. The inline comments identify important implementation boundaries; this guide explains how those boundaries connect.
 
@@ -24,7 +24,7 @@ The browser never connects to D1 directly and contains no database credentials.
 This is the semantic structure of the site. It contains:
 
 - The signed-out authentication card.
-- The signed-in header and navigation.
+- The signed-in collapsible sidebar and mobile slide-over navigation.
 - One `<section class="view">` for each application tab.
 - Native `<dialog>` elements for transaction, account, balance, purchase, and CSV forms.
 - Accessible labels, table headings, status regions, and buttons.
@@ -39,11 +39,17 @@ The first `:root` block defines the design tokens: colours, typography, borders,
 
 `[hidden] { display: none !important; }` is important because component classes such as `.auth-screen` define their own display layout. Without this rule, a class declaration could visually override the HTML `hidden` attribute.
 
-The SVG chart is drawn by JavaScript, while CSS controls areas, lines, gridlines, labels, and projected-line dashes.
+The SVG charts are drawn by JavaScript, while CSS controls areas, lines,
+gridlines, labels, donut slices, account layers, and responsive chart layouts.
+Below 800 pixels, transaction table rows become labeled cards and the category
+ranking moves below the master-category donut.
 
 ### `frontend/src/config.js`
 
-This small file supplies the Worker base URL. Local development uses `http://localhost:8787`. The GitHub deployment workflow rewrites it to the production Worker URL before building Pages.
+This small file supplies the API base URL. Local development uses port 8787.
+Production uses `window.location.origin`, where a Pages Function forwards
+`/api/*` requests to the dedicated Worker so mobile session cookies remain
+same-origin.
 
 ### `frontend/src/app.js`
 
@@ -51,7 +57,7 @@ This is organized conceptually into these sections:
 
 1. Configuration, temporary state, and DOM/format helpers.
 2. The shared `api()` client and notification/error handling.
-3. Date, CSV, and rendering helpers.
+3. Date, CSV, direction, and SVG rendering helpers.
 4. Data loaders for transactions, monthly summaries, budgets, net worth, and settings.
 5. A delegated document click/change handler for dynamic buttons and selects.
 6. Form submit handlers that translate form values into API JSON.
@@ -59,7 +65,22 @@ This is organized conceptually into these sections:
 
 `api()` always includes browser credentials so the HttpOnly session cookie accompanies API requests. It reads the Worker's structured error response and turns it into a useful UI message including the request ID.
 
-The `state` object is not permanent storage. It caches the current user's categories/accounts and the current page of transactions to avoid repeated lookups while rendering forms.
+The `state` object is not permanent storage. It caches the current user's
+lookups, transaction page, selected master category, timeline, net-worth chart
+mode, and account toggles. D1 remains authoritative after refresh.
+
+`transactionType` and `transactionDirection` are deliberately separate. For
+example, an expense/debit is a purchase and an expense/credit is a refund. CSV
+rows infer direction from their signed amount, but the preview remains editable.
+
+`renderSpendingBreakdown()` draws the master-category donut. Both its slices
+and legend buttons call `selectMasterCategory()`, which rerenders the ranked
+category bars from the already-loaded summary. The category rows reveal budget,
+transaction, average, and refund detail on hover or keyboard focus.
+
+The net-worth loader preserves the original fixed/liquid SVG and can replace it
+with account layers. Account checkboxes redraw only the chosen balances, while
+hover/focus points fill the dated detail card.
 
 The login bug fixed in V7.1 was caused by reading `event.currentTarget` after `await`. Browsers clear that event property after the synchronous callback returns. V7.1 captures `const formElement = event.currentTarget` before starting asynchronous work, then safely calls `formElement.reset()` afterward. Category and rule forms use the same safe pattern.
 
@@ -134,7 +155,7 @@ Category suggestions prioritize explicit rules, normalized exact merchant histor
 
 ### `worker/src/validation.ts`
 
-This module checks transaction payloads before repository insertion. It validates ISO dates, IDs, vendor length, positive integer cents, transaction type, optional description, currency, fingerprints, and signed balance effects.
+This module checks transaction payloads before repository insertion. It validates ISO dates, IDs, vendor length, positive integer cents, transaction type, debit/credit direction, optional description, currency, fingerprints, and signed balance effects.
 
 It returns field-specific issues instead of throwing on every invalid field, allowing the CSV importer to report multiple useful row problems.
 
@@ -150,7 +171,10 @@ This module contains pure projection calculations. It does not access D1, the cl
 - If the closest snapshot is after the date, it reverses intervening effects.
 - With no snapshot, it accumulates known effects.
 
-`buildNetWorthTimeline()` creates actual values through today, then projects forward using growth, interest, payments, equity, dividends, depreciation, monthly contributions, and planned purchases. Fixed and liquid accounts are aggregated separately.
+`buildNetWorthTimeline()` creates actual values through today, then projects
+forward using payments, liability interest, equity, dividends, monthly
+contributions, and planned purchases. Every point includes both fixed/liquid
+totals and individual account balances for the two chart modes.
 
 ### `worker/src/http.ts`
 
@@ -175,6 +199,7 @@ Migrations are applied in numerical order and should never be edited after produ
 - `0005`: uncategorized fallback rows.
 - `0006`: signed transaction balance effects and future purchases.
 - `0007`: users, sessions, rate-limit attempts, and full tenant-aware table rebuild.
+- `0008`: debit/credit transaction direction plus an index for signed reports.
 
 Migration 0007 gives each financial table a `user_id`. Composite foreign keys such as `(account_id,user_id)` prevent one user's transaction from referencing another user's account. Uniqueness is per user, allowing two people to both create an account named “Chequing.”
 
@@ -182,7 +207,9 @@ Migration 0007 gives each financial table a `user_id`. Composite foreign keys su
 
 ## 5. Tests and automation
 
-Worker tests cover password policy/hashing, transaction validation, HTTP errors, projection formulas, and historical timeline behavior.
+Worker tests cover password policy/hashing, refund-aware transaction validation
+and totals, HTTP errors, projection formulas, and per-account historical
+timeline behavior.
 
 `pnpm check` performs formatting checks, frontend/Worker lint, generated Worker types, TypeScript checks, unit tests, a Worker deployment dry-run, and a static frontend build.
 
