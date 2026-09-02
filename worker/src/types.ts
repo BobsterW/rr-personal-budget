@@ -36,6 +36,20 @@ export interface ProjectionAssumptions {
 
 export type PaymentFrequency = "none" | "monthly" | "yearly";
 export type LiquidityClass = "fixed" | "liquid";
+export type ProjectionRuleType = "income" | "expense" | "transfer";
+export type ProjectionRuleFrequency = "monthly" | "yearly" | "once";
+
+export interface ProjectionRule {
+  id: string;
+  description: string;
+  ruleType: ProjectionRuleType;
+  amountMinor: number;
+  frequency: ProjectionRuleFrequency;
+  startDate: string;
+  endDate: string | null;
+  fromAccountId: string | null;
+  toAccountId: string | null;
+}
 
 export interface AccountProjectionInput {
   id: string;

@@ -32,6 +32,9 @@ import type {
   PaymentFrequency,
   LiquidityClass,
   ProjectionAssumptions,
+  ProjectionRule,
+  ProjectionRuleFrequency,
+  ProjectionRuleType,
   TransactionType,
 } from "./types";
 import { validateTransaction } from "./validation";
@@ -57,6 +60,16 @@ const PAYMENT_FREQUENCIES = new Set<PaymentFrequency>([
   "yearly",
 ]);
 const LIQUIDITY_CLASSES = new Set<LiquidityClass>(["fixed", "liquid"]);
+const PROJECTION_RULE_TYPES = new Set<ProjectionRuleType>([
+  "income",
+  "expense",
+  "transfer",
+]);
+const PROJECTION_RULE_FREQUENCIES = new Set<ProjectionRuleFrequency>([
+  "monthly",
+  "yearly",
+  "once",
+]);
 
 // Credentialed CORS is emitted only for an explicitly configured frontend.
 function cors(request: Request, env: Env): Record<string, string> {
@@ -65,7 +78,7 @@ function cors(request: Request, env: Env): Record<string, string> {
   return origin && allowed.includes(origin)
     ? {
         "access-control-allow-origin": origin,
-        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
         "access-control-allow-headers": "content-type",
         "access-control-allow-credentials": "true",
         vary: "Origin",
@@ -543,6 +556,105 @@ async function route(request: Request, env: Env): Promise<Response> {
       201,
     );
   }
+  if (path === "/api/v1/transactions/selection" && method === "GET") {
+    if (url.searchParams.has("startDate"))
+      requireDate(url.searchParams.get("startDate"), "startDate");
+    if (url.searchParams.has("endDate"))
+      requireDate(url.searchParams.get("endDate"), "endDate");
+    return json({ data: await repo.listTransactionIds(url.searchParams) });
+  }
+  if (path === "/api/v1/transactions/bulk" && method === "PATCH") {
+    const body = assertObject(await readJson(request));
+    if (
+      !Array.isArray(body.ids) ||
+      body.ids.length < 1 ||
+      body.ids.length > 500 ||
+      body.ids.some((id) => typeof id !== "string" || !id)
+    )
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "ids must contain between 1 and 500 transaction IDs.",
+      );
+    const ids = [...new Set(body.ids as string[])];
+    if (ids.length !== body.ids.length)
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Transaction IDs must not be repeated.",
+      );
+    const changesBody = assertObject(body.changes),
+      changes: {
+        accountId?: string;
+        categoryId?: string;
+        transactionType?: TransactionType;
+        transactionDirection?: "debit" | "credit";
+      } = {};
+    if (changesBody.accountId !== undefined)
+      changes.accountId = requireString(changesBody, "accountId");
+    if (changesBody.categoryId !== undefined)
+      changes.categoryId = requireString(changesBody, "categoryId");
+    if (changesBody.transactionType !== undefined) {
+      const value = requireString(
+        changesBody,
+        "transactionType",
+      ) as TransactionType;
+      if (!TRANSACTION_TYPES.has(value))
+        throw new ApiError(
+          422,
+          "VALIDATION_ERROR",
+          "Invalid transaction type.",
+        );
+      changes.transactionType = value;
+    }
+    if (changesBody.transactionDirection !== undefined) {
+      const value = requireString(changesBody, "transactionDirection");
+      if (value !== "debit" && value !== "credit")
+        throw new ApiError(
+          422,
+          "VALIDATION_ERROR",
+          "Invalid transaction direction.",
+        );
+      changes.transactionDirection = value;
+    }
+    if (!Object.keys(changes).length)
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Choose at least one field to change.",
+      );
+    for (const [table, id] of [
+      ["accounts", changes.accountId],
+      ["categories", changes.categoryId],
+    ] as const) {
+      if (!id) continue;
+      const exists = await env.DB.prepare(
+        `SELECT id FROM ${table} WHERE id=? AND user_id=? AND active=1`,
+      )
+        .bind(id, user.id)
+        .first();
+      if (!exists)
+        throw new ApiError(
+          422,
+          "INVALID_REFERENCE",
+          `The selected ${table.slice(0, -1)} does not exist or is archived.`,
+        );
+    }
+    const updated = await repo.bulkUpdateTransactions(ids, changes);
+    if (updated < 0)
+      throw new ApiError(
+        404,
+        "NOT_FOUND",
+        "One or more selected transactions no longer exist.",
+      );
+    if (updated !== ids.length)
+      throw new ApiError(
+        409,
+        "BULK_UPDATE_INCOMPLETE",
+        "The selected transactions changed. Refresh and try again.",
+      );
+    return json({ data: { updated } });
+  }
   const transactionMatch = path.match(/^\/api\/v1\/transactions\/([^/]+)$/);
   if (transactionMatch && method === "PUT") {
     const validation = validateTransaction(await readJson(request));
@@ -693,6 +805,106 @@ async function route(request: Request, env: Env): Promise<Response> {
       throw new ApiError(404, "NOT_FOUND", "Future purchase not found.");
     return new Response(null, { status: 204 });
   }
+  if (path === "/api/v1/projection-rules" && method === "GET")
+    return json({
+      data: (await repo.listProjectionRules()).map((row) => toCamel(row)),
+    });
+  if (path === "/api/v1/projection-rules" && method === "POST") {
+    const body = assertObject(await readJson(request)),
+      description = requireString(body, "description"),
+      ruleType = requireString(body, "ruleType") as ProjectionRuleType,
+      frequency = requireString(body, "frequency") as ProjectionRuleFrequency,
+      startDate = requireDate(
+        typeof body.startDate === "string" ? body.startDate : null,
+        "startDate",
+      ),
+      endDate =
+        body.endDate === null ||
+        body.endDate === "" ||
+        body.endDate === undefined
+          ? null
+          : requireDate(String(body.endDate), "endDate");
+    if (!PROJECTION_RULE_TYPES.has(ruleType))
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Invalid projection rule type.",
+      );
+    if (!PROJECTION_RULE_FREQUENCIES.has(frequency))
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Invalid projection frequency.",
+      );
+    if (
+      !Number.isSafeInteger(body.amountMinor) ||
+      Number(body.amountMinor) <= 0
+    )
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "amountMinor must be a positive integer number of cents.",
+      );
+    if (endDate && endDate < startDate)
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "End date cannot be before start date.",
+      );
+    const fromAccountId =
+        typeof body.fromAccountId === "string" && body.fromAccountId
+          ? body.fromAccountId
+          : null,
+      toAccountId =
+        typeof body.toAccountId === "string" && body.toAccountId
+          ? body.toAccountId
+          : null;
+    const shapeValid =
+      (ruleType === "income" && !fromAccountId && Boolean(toAccountId)) ||
+      (ruleType === "expense" && Boolean(fromAccountId) && !toAccountId) ||
+      (ruleType === "transfer" &&
+        Boolean(fromAccountId) &&
+        Boolean(toAccountId) &&
+        fromAccountId !== toAccountId);
+    if (!shapeValid)
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Income needs a destination, expenses need a source, and transfers need different source and destination accounts.",
+      );
+    for (const accountId of [fromAccountId, toAccountId].filter(Boolean)) {
+      const account = await env.DB.prepare(
+        "SELECT id FROM accounts WHERE id=? AND user_id=? AND active=1",
+      )
+        .bind(accountId, user.id)
+        .first();
+      if (!account)
+        throw new ApiError(
+          422,
+          "INVALID_ACCOUNT",
+          "A selected account does not exist or is archived.",
+        );
+    }
+    const record = await repo.createProjectionRule({
+      description,
+      ruleType,
+      amountMinor: Number(body.amountMinor),
+      frequency,
+      startDate,
+      endDate,
+      fromAccountId,
+      toAccountId,
+    });
+    return json({ data: toCamel(record as Record<string, unknown>) }, 201);
+  }
+  const projectionRuleMatch = path.match(
+    /^\/api\/v1\/projection-rules\/([^/]+)$/,
+  );
+  if (projectionRuleMatch && method === "DELETE") {
+    if (!(await repo.deleteProjectionRule(projectionRuleMatch[1]!)))
+      throw new ApiError(404, "NOT_FOUND", "Projection rule not found.");
+    return new Response(null, { status: 204 });
+  }
   if (path === "/api/v1/net-worth-timeline" && method === "GET") {
     const startDate = requireDate(
         url.searchParams.get("startDate"),
@@ -749,6 +961,20 @@ async function route(request: Request, env: Env): Promise<Response> {
       date: String(row.purchase_date),
       amountMinor: Number(row.amount_minor),
     }));
+    const projectionRules: ProjectionRule[] = raw.projectionRules.map((row) => {
+      const item = toCamel(row);
+      return {
+        id: String(item.id),
+        description: String(item.description),
+        ruleType: item.ruleType as ProjectionRuleType,
+        amountMinor: Number(item.amountMinor),
+        frequency: item.frequency as ProjectionRuleFrequency,
+        startDate: String(item.startDate),
+        endDate: item.endDate ? String(item.endDate) : null,
+        fromAccountId: item.fromAccountId ? String(item.fromAccountId) : null,
+        toAccountId: item.toAccountId ? String(item.toAccountId) : null,
+      };
+    });
     const assumptions: ProjectionAssumptions = {
       monthlyIncomeMinor: assumptionRow.monthly_income_minor!,
       monthlyExpenseMinor: assumptionRow.monthly_expense_minor!,
@@ -769,6 +995,7 @@ async function route(request: Request, env: Env): Promise<Response> {
           startDate,
           endDate,
           today,
+          projectionRules,
         ),
       },
     });

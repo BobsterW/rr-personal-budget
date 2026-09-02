@@ -22,7 +22,11 @@ const state = {
   total: 0,
   csv: null,
   summary: null,
+  activityMode: "expense",
   selectedMasterCategoryId: null,
+  bulkEditMode: false,
+  selectedTransactionIds: new Set(),
+  lastSelectedTransactionIndex: null,
   netWorthTimeline: null,
   netWorthMode: "liquidity",
   selectedNetWorthAccounts: new Set(),
@@ -173,17 +177,6 @@ function today() {
   });
 }
 
-// Projection length follows the visible graph range instead of exposing a
-// second, potentially conflicting "projection months" setting.
-function projectionMonthsFromEndDate(endDate) {
-  const start = new Date(`${today()}T00:00:00Z`);
-  const end = new Date(`${endDate}T00:00:00Z`);
-  if (Number.isNaN(end.getTime())) return 60;
-  const approximateMonths = Math.ceil(
-    (end.getTime() - start.getTime()) / (30.4375 * 86_400_000),
-  );
-  return Math.max(1, Math.min(600, approximateMonths));
-}
 function yearStart() {
   return `${today().slice(0, 4)}-01-01`;
 }
@@ -216,6 +209,17 @@ function refreshSelects() {
   $$('select[name="accountId"]').forEach((element) => {
     element.innerHTML = optionList(state.accounts);
   });
+  for (const name of ["fromAccountId", "toAccountId"]) {
+    const select = $(`select[name="${name}"]`);
+    if (select)
+      select.innerHTML =
+        '<option value="">Choose an account</option>' +
+        optionList(state.accounts);
+  }
+  $("#bulk-account").innerHTML =
+    '<option value="">No change</option>' + optionList(state.accounts);
+  $("#bulk-category").innerHTML =
+    '<option value="">No change</option>' + optionList(state.categories);
 }
 
 async function loadLookups() {
@@ -233,7 +237,8 @@ async function loadLookups() {
   refreshSelects();
   for (const type of ["expense", "income"]) {
     const select = $(`#${type}-trend-filter`),
-      previous = select.value;
+      previous = select?.value;
+    if (!select) continue;
     select.innerHTML = trendFilterOptions(type);
     if ([...select.options].some((option) => option.value === previous))
       select.value = previous;
@@ -293,7 +298,8 @@ async function loadTransactions() {
             : direction === "credit"
               ? "Money in"
               : "Money out";
-      return `<tr class="transaction-${direction}"><td data-label="Date">${escapeHtml(item.transactionDate)}</td><td data-label="Vendor"><strong>${escapeHtml(item.vendorName)}</strong>${item.description ? `<br><small>${escapeHtml(item.description)}</small>` : ""}</td><td data-label="Category">${escapeHtml(item.categoryName)}</td><td data-label="Account">${escapeHtml(item.accountName)}</td><td data-label="Type"><span class="pill">${escapeHtml(item.transactionType)}</span> <span class="pill direction-pill">${escapeHtml(directionName)}</span></td><td data-label="Amount" class="money signed-amount">${signedMinor > 0 ? "+" : "−"}${money.format(Math.abs(dollars(signedMinor)))}</td><td data-label="Actions" class="transaction-actions"><button class="secondary edit-transaction" data-id="${escapeHtml(item.id)}">Edit</button> <button class="secondary danger delete-transaction" data-id="${escapeHtml(item.id)}">Delete</button></td></tr>`;
+      const selected = state.selectedTransactionIds.has(item.id);
+      return `<tr class="transaction-${direction} ${selected ? "bulk-selected" : ""}" data-transaction-row="${escapeHtml(item.id)}"><td class="bulk-select-column" data-label="Select" ${state.bulkEditMode ? "" : "hidden"}><input class="transaction-select" type="checkbox" data-id="${escapeHtml(item.id)}" aria-label="Select ${escapeHtml(item.vendorName)}" ${selected ? "checked" : ""}/></td><td data-label="Date">${escapeHtml(item.transactionDate)}</td><td data-label="Vendor"><strong>${escapeHtml(item.vendorName)}</strong>${item.description ? `<br><small>${escapeHtml(item.description)}</small>` : ""}</td><td data-label="Category">${escapeHtml(item.categoryName)}</td><td data-label="Account">${escapeHtml(item.accountName)}</td><td data-label="Type"><span class="pill">${escapeHtml(item.transactionType)}</span> <span class="pill direction-pill">${escapeHtml(directionName)}</span></td><td data-label="Amount" class="money signed-amount">${signedMinor > 0 ? "+" : "−"}${money.format(Math.abs(dollars(signedMinor)))}</td><td data-label="Actions" class="transaction-actions"><button class="secondary edit-transaction" data-id="${escapeHtml(item.id)}">Edit</button> <button class="secondary danger delete-transaction" data-id="${escapeHtml(item.id)}">Delete</button></td></tr>`;
     })
     .join("");
   $("#transactions-empty").hidden = state.transactions.length > 0;
@@ -301,6 +307,69 @@ async function loadTransactions() {
   $("#page-label").textContent = `Page ${state.page} of ${pages}`;
   $("#previous-page").disabled = state.page <= 1;
   $("#next-page").disabled = state.page >= pages;
+  updateBulkEditUi();
+}
+function updateBulkEditUi() {
+  $("#bulk-edit-toolbar").hidden = !state.bulkEditMode;
+  $("#bulk-edit-toggle").textContent = state.bulkEditMode
+    ? "Editing multiple"
+    : "Edit multiple";
+  $("#bulk-selected-count").textContent = String(
+    state.selectedTransactionIds.size,
+  );
+  $$(".bulk-select-column").forEach(
+    (element) => (element.hidden = !state.bulkEditMode),
+  );
+  $("#apply-bulk-edit").disabled = !state.selectedTransactionIds.size;
+}
+function setBulkEditMode(enabled) {
+  state.bulkEditMode = enabled;
+  if (!enabled) {
+    state.selectedTransactionIds.clear();
+    state.lastSelectedTransactionIndex = null;
+    for (const select of [
+      "#bulk-account",
+      "#bulk-category",
+      "#bulk-type",
+      "#bulk-direction",
+    ])
+      $(select).value = "";
+  }
+  updateBulkEditUi();
+  void loadTransactions();
+}
+function selectTransactionAt(index, checked, range = false) {
+  if (range && state.lastSelectedTransactionIndex !== null) {
+    const start = Math.min(state.lastSelectedTransactionIndex, index),
+      end = Math.max(state.lastSelectedTransactionIndex, index);
+    for (let cursor = start; cursor <= end; cursor += 1) {
+      const id = state.transactions[cursor]?.id;
+      if (id)
+        checked
+          ? state.selectedTransactionIds.add(id)
+          : state.selectedTransactionIds.delete(id);
+    }
+  } else {
+    const id = state.transactions[index]?.id;
+    if (id)
+      checked
+        ? state.selectedTransactionIds.add(id)
+        : state.selectedTransactionIds.delete(id);
+  }
+  state.lastSelectedTransactionIndex = index;
+  void loadTransactions();
+}
+function currentTransactionFilters() {
+  const params = new URLSearchParams();
+  const search = $("#transaction-search").value.trim(),
+    type = $("#transaction-type-filter").value;
+  if ($("#transaction-start-date").value)
+    params.set("startDate", $("#transaction-start-date").value);
+  if ($("#transaction-end-date").value)
+    params.set("endDate", $("#transaction-end-date").value);
+  if (search) params.set("search", search);
+  if (type) params.set("type", type);
+  return params;
 }
 function drawBars(selector, rows) {
   const max = Math.max(1, ...rows.map((row) => Math.abs(row.amountMinor)));
@@ -308,7 +377,7 @@ function drawBars(selector, rows) {
     ? rows
         .map(
           (row) =>
-            `<div class="bar-row ${row.amountMinor < 0 ? "is-refund-total" : ""}"><span>${escapeHtml(row.name)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (Math.abs(row.amountMinor) / max) * 100)}%"></div></div><strong>${money.format(dollars(row.amountMinor))}</strong></div>`,
+            `<div class="bar-row ${row.amountMinor < 0 ? "is-refund-total" : ""}"><span>${escapeHtml(row.name)}</span><div class="bar-track"><div class="bar-fill" style="width:${(Math.abs(row.amountMinor) / max) * 100}%"></div></div><strong>${money.format(dollars(row.amountMinor))}</strong></div>`,
         )
         .join("")
     : '<div class="empty">No spending this month.</div>';
@@ -338,7 +407,8 @@ function donutPath(start, end) {
   return `M${outerStart.x},${outerStart.y} A92,92 0 ${large},1 ${outerEnd.x},${outerEnd.y} L${innerEnd.x},${innerEnd.y} A54,54 0 ${large},0 ${innerStart.x},${innerStart.y} Z`;
 }
 function renderCategoryRanking() {
-  const data = state.summary;
+  const summary = state.summary,
+    data = summary?.activity?.[state.activityMode];
   if (!data) return;
   const selected = state.selectedMasterCategoryId;
   const rows = data.byCategory
@@ -361,18 +431,19 @@ function renderCategoryRanking() {
     ? rows
         .map((row, index) => {
           const periodBudget =
-            Number(row.monthly_budget_minor ?? 0) * data.monthCount;
+            Number(row.monthly_budget_minor ?? 0) * summary.monthCount;
           const remaining = periodBudget - row.amount_minor;
           const count = Number(row.transaction_count ?? 0);
           const average = count ? row.amount_minor / count : 0;
-          const refundMinor = Number(row.refund_minor ?? 0);
-          return `<article class="ranked-category-row ${row.amount_minor < 0 ? "is-refund-total" : ""}" tabindex="0"><span class="rank-number">${index + 1}</span><div class="ranked-category-main"><div class="ranked-category-label"><strong>${escapeHtml(row.name)}</strong><span>${money.format(dollars(row.amount_minor))}</span></div><div class="ranked-track"><span style="width:${Math.max(2, (Math.abs(row.amount_minor) / max) * 100)}%"></span></div></div><div class="category-tooltip" role="tooltip"><strong>${escapeHtml(row.name)}</strong><span>Net actual: ${money.format(dollars(row.amount_minor))}</span><span>Budget: ${periodBudget ? money.format(dollars(periodBudget)) : "Not set"}</span><span>${periodBudget ? `${remaining < 0 ? "Over" : "Remaining"}: ${money.format(dollars(Math.abs(remaining)))}` : ""}</span><span>${count} transaction${count === 1 ? "" : "s"} · Average ${money.format(dollars(average))}</span><span>${refundMinor ? `Refunds: ${money.format(dollars(refundMinor))}` : "No refunds in this range"}</span></div></article>`;
+          const reversalMinor = Number(row.reversal_minor ?? 0);
+          return `<article class="ranked-category-row ${row.amount_minor < 0 ? "is-refund-total" : ""}" tabindex="0"><span class="rank-number">${index + 1}</span><div class="ranked-category-main"><div class="ranked-category-label"><strong>${escapeHtml(row.name)}</strong><span>${money.format(dollars(row.amount_minor))}</span></div><div class="ranked-track"><span style="width:${(Math.abs(row.amount_minor) / max) * 100}%"></span></div></div><div class="category-tooltip" role="tooltip"><strong>${escapeHtml(row.name)}</strong><span>Net actual: ${money.format(dollars(row.amount_minor))}</span><span>${state.activityMode === "income" ? "Target" : "Budget"}: ${periodBudget ? money.format(dollars(periodBudget)) : "Not set"}</span><span>${periodBudget ? `${remaining < 0 ? "Over" : "Remaining"}: ${money.format(dollars(Math.abs(remaining)))}` : ""}</span><span>${count} transaction${count === 1 ? "" : "s"} · Average ${money.format(dollars(average))}</span><span>${reversalMinor ? `${state.activityMode === "expense" ? "Refunds" : "Reversals"}: ${money.format(dollars(reversalMinor))}` : `No ${state.activityMode === "expense" ? "refunds" : "reversals"} in this range`}</span></div></article>`;
         })
         .join("")
     : '<div class="empty">No categories belong to this master category in the selected range.</div>';
 }
 function renderSpendingBreakdown() {
-  const data = state.summary;
+  const summary = state.summary,
+    data = summary?.activity?.[state.activityMode];
   if (!data) return;
   const rows = data.byMasterCategory.map((row) => ({
     ...row,
@@ -390,15 +461,15 @@ function renderSpendingBreakdown() {
         angle - start >= Math.PI * 2 - 0.0001 ? angle - 0.0001 : angle;
       const share = Math.round((row.positiveMinor / Math.max(1, total)) * 100);
       const selected = state.selectedMasterCategoryId === row.key;
-      return `<path class="donut-slice ${selected ? "selected" : ""}" d="${donutPath(start, drawableEnd)}" fill="${chartColors[index % chartColors.length]}" data-master-id="${escapeHtml(row.key)}" tabindex="0" role="button" aria-label="Filter to ${escapeHtml(row.name)}, ${share} percent, ${money.format(dollars(row.amount_minor))}"><title>${escapeHtml(row.name)}\n${money.format(dollars(row.amount_minor))} · ${share}%\n${Number(row.transaction_count ?? 0)} transactions${Number(row.refund_minor ?? 0) ? `\nRefunds ${money.format(dollars(row.refund_minor))}` : ""}</title></path>`;
+      return `<path class="donut-slice ${selected ? "selected" : ""}" d="${donutPath(start, drawableEnd)}" fill="${chartColors[index % chartColors.length]}" data-master-id="${escapeHtml(row.key)}" tabindex="0" role="button" aria-label="Filter to ${escapeHtml(row.name)}, ${share} percent, ${money.format(dollars(row.amount_minor))}"><title>${escapeHtml(row.name)}\n${money.format(dollars(row.amount_minor))} · ${share}%\n${Number(row.transaction_count ?? 0)} transactions</title></path>`;
     })
     .join("");
   const selectedRow = rows.find(
     (row) => row.key === state.selectedMasterCategoryId,
   );
   $("#master-category-donut").innerHTML = total
-    ? `<svg viewBox="0 0 220 220" role="img" aria-label="Master category spending donut">${paths}<circle class="donut-center" cx="110" cy="110" r="47"/><text class="donut-center-label" x="110" y="101">${selectedRow ? escapeHtml(selectedRow.name) : "Expenses"}</text><text class="donut-center-value" x="110" y="124">${money.format(dollars(selectedRow?.amount_minor ?? data.expenseMinor))}</text></svg>`
-    : '<div class="empty">No positive expense activity in this range.</div>';
+    ? `<svg viewBox="0 0 220 220" role="img" aria-label="Master category ${state.activityMode} donut">${paths}<circle class="donut-center" cx="110" cy="110" r="47"/><text class="donut-center-label" x="110" y="101">${selectedRow ? escapeHtml(selectedRow.name) : state.activityMode === "expense" ? "Expenses" : "Income"}</text><text class="donut-center-value" x="110" y="124">${money.format(dollars(selectedRow?.amount_minor ?? (state.activityMode === "expense" ? summary.expenseMinor : summary.incomeMinor)))}</text></svg>`
+    : `<div class="empty">No positive ${state.activityMode} activity in this range.</div>`;
   $("#master-category-legend").innerHTML = rows.length
     ? rows
         .map((row, index) => {
@@ -413,6 +484,72 @@ function selectMasterCategory(value) {
   state.selectedMasterCategoryId =
     state.selectedMasterCategoryId === value ? null : value;
   renderSpendingBreakdown();
+  renderFilteredActivityCards();
+  void loadTrend(state.activityMode, state.selectedMasterCategoryId);
+}
+function aggregateAccountRows(rows) {
+  const totals = new Map();
+  for (const row of rows) {
+    const current = totals.get(row.id) ?? { ...row, amountMinor: 0 };
+    current.amountMinor += Number(row.amount_minor ?? 0);
+    totals.set(row.id, current);
+  }
+  return [...totals.values()].sort((a, b) => b.amountMinor - a.amountMinor);
+}
+function renderFilteredActivityCards() {
+  const summary = state.summary,
+    data = summary?.activity?.[state.activityMode];
+  if (!data) return;
+  const selected = state.selectedMasterCategoryId,
+    categories = data.byCategory.filter(
+      (row) =>
+        selected === null || masterKey(row.master_category_id) === selected,
+    ),
+    accountRows = data.byAccount.filter(
+      (row) =>
+        selected === null || masterKey(row.master_category_id) === selected,
+    );
+  drawBars("#account-bars", aggregateAccountRows(accountRows));
+  $("#category-budget-status").innerHTML = categories.length
+    ? categories
+        .map((row) => {
+          const target =
+              Number(row.monthly_budget_minor ?? 0) * summary.monthCount,
+            remaining = target - row.amount_minor;
+          return `<div class="budget-row ${state.activityMode === "expense" && remaining < 0 ? "is-over" : ""}"><span>${escapeHtml(row.name)}</span><span>Actual ${money.format(dollars(row.amount_minor))}</span><span>${state.activityMode === "income" ? "Target" : "Budget"} ${money.format(dollars(target))}</span><strong>${target ? `${remaining < 0 ? (state.activityMode === "expense" ? "Over" : "Above target") : state.activityMode === "expense" ? "Left" : "To target"} ${money.format(dollars(Math.abs(remaining)))}` : `No ${state.activityMode === "income" ? "target" : "budget"} set`}</strong></div>`;
+        })
+        .join("")
+    : `<div class="empty">No ${state.activityMode} activity in this range.</div>`;
+}
+function setActivityMode(mode) {
+  state.activityMode = mode;
+  state.selectedMasterCategoryId = null;
+  $$(".activity-mode").forEach((button) => {
+    const active = button.dataset.activityMode === mode;
+    button.classList.toggle("secondary", !active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const income = mode === "income";
+  $("#activity-mix-eyebrow").textContent = income
+    ? "Income mix"
+    : "Spending mix";
+  $("#activity-master-title").textContent = income
+    ? "Income master categories"
+    : "Expense master categories";
+  $("#activity-account-title").textContent = income
+    ? "Income by receiving account"
+    : "Expenses by account";
+  $("#activity-budget-title").textContent = income
+    ? "Income target tracking"
+    : "Category budget tracking";
+  $("#activity-trend-title").textContent = income
+    ? "Income trend"
+    : "Expense trend";
+  const select = $("#expense-trend-filter");
+  select.innerHTML = trendFilterOptions(mode);
+  renderSpendingBreakdown();
+  renderFilteredActivityCards();
+  void loadTrend(mode);
 }
 async function loadSummary() {
   const range = new URLSearchParams({
@@ -424,7 +561,7 @@ async function loadSummary() {
   state.summary = data;
   if (
     state.selectedMasterCategoryId !== null &&
-    !data.byMasterCategory.some(
+    !data.activity[state.activityMode].byMasterCategory.some(
       (row) => masterKey(row.id) === state.selectedMasterCategoryId,
     )
   )
@@ -446,24 +583,8 @@ async function loadSummary() {
   $("#month-comparison").textContent =
     `Showing ${data.startDate} through ${data.endDate} (${data.monthCount} budget month${data.monthCount === 1 ? "" : "s"}).`;
   renderSpendingBreakdown();
-  drawBars(
-    "#account-bars",
-    data.byAccount.map((row) => ({ ...row, amountMinor: row.amount_minor })),
-  );
-  $("#category-budget-status").innerHTML = data.byCategory.length
-    ? data.byCategory
-        .map((row) => {
-          const periodBudget =
-            Number(row.monthly_budget_minor ?? 0) * data.monthCount;
-          const remaining = periodBudget - row.amount_minor;
-          const percent = periodBudget
-            ? Math.round((row.amount_minor / periodBudget) * 100)
-            : null;
-          return `<div class="budget-row ${remaining < 0 ? "is-over" : ""}"><span>${escapeHtml(row.name)}</span><span>Actual ${money.format(dollars(row.amount_minor))}</span><span>Budget ${money.format(dollars(periodBudget))}</span><strong>${periodBudget ? `${percent}% · ${remaining < 0 ? "Over" : "Left"} ${money.format(dollars(Math.abs(remaining)))}` : "No budget set"}</strong></div>`;
-        })
-        .join("")
-    : '<div class="empty">No expense activity in this range.</div>';
-  await Promise.all([loadTrend("expense"), loadTrend("income")]);
+  renderFilteredActivityCards();
+  await loadTrend(state.activityMode, state.selectedMasterCategoryId);
 }
 
 function trendFilterOptions(type) {
@@ -530,9 +651,11 @@ function drawTrend(selector, rows) {
   $(selector).innerHTML =
     `<div class="trend-chart-frame"><svg viewBox="0 0 1200 455" role="img" aria-label="Actual, budget, and average monthly trend with monthly and dollar labels">${grid}${months}<path class="trend-actual" d="${path("actualMinor")}"/><path class="trend-budget" d="${path("budgetMinor")}"/><path class="trend-average" d="${path("averageMinor")}"/>${points}</svg></div><div class="trend-legend"><span class="actual-key">Actual</span><span class="budget-key">Budget</span><span class="average-key">Average actual</span></div>`;
 }
-async function loadTrend(type) {
-  const selector = $(`#${type}-trend-filter`),
-    value = selector.value || "all";
+async function loadTrend(type, masterOverride = null) {
+  const selector = $("#expense-trend-filter"),
+    value = masterOverride
+      ? `master:${masterOverride}`
+      : selector.value || "all";
   const params = new URLSearchParams({
     startDate: $("#summary-start-date").value,
     endDate: $("#summary-end-date").value,
@@ -542,7 +665,7 @@ async function loadTrend(type) {
   if (value.startsWith("master:"))
     params.set("masterCategoryId", value.slice(7));
   const result = await api(`/api/v1/spending-trends?${params}`);
-  drawTrend(`#${type}-trend-chart`, result.data);
+  drawTrend("#expense-trend-chart", result.data);
 }
 
 async function loadBudget() {
@@ -578,12 +701,14 @@ async function loadNetWorth() {
     startDate: $("#networth-start-date").value,
     endDate: $("#networth-end-date").value,
   });
-  const [balances, projection, timeline, purchases] = await Promise.all([
-    api("/api/v1/balance-snapshots"),
-    api("/api/v1/projection"),
-    api(`/api/v1/net-worth-timeline?${range}`),
-    api("/api/v1/future-purchases"),
-  ]);
+  const [balances, projection, timeline, purchases, projectionRules] =
+    await Promise.all([
+      api("/api/v1/balance-snapshots"),
+      api("/api/v1/projection"),
+      api(`/api/v1/net-worth-timeline?${range}`),
+      api("/api/v1/future-purchases"),
+      api("/api/v1/projection-rules"),
+    ]);
   const latest = new Map();
   balances.data.forEach((row) => latest.set(row.accountId, row));
   $("#balances-body").innerHTML = balances.data
@@ -599,11 +724,19 @@ async function loadNetWorth() {
   $("#networth-total").textContent = money.format(
     dollars(assets - liabilities),
   );
-  const form = $("#projection-form"),
-    assumptions = projection.data.assumptions;
-  form.monthlyIncome.value = dollars(assumptions.monthlyIncomeMinor);
-  form.monthlyExpense.value = dollars(assumptions.monthlyExpenseMinor);
-  form.monthlySavings.value = dollars(assumptions.monthlySavingsMinor);
+  $("#projection-rules-list").innerHTML = projectionRules.data.length
+    ? projectionRules.data
+        .map((item) => {
+          const route =
+            item.ruleType === "income"
+              ? `Into ${item.toAccountName}`
+              : item.ruleType === "expense"
+                ? `From ${item.fromAccountName}`
+                : `${item.fromAccountName} → ${item.toAccountName}`;
+          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType)} · ${escapeHtml(item.frequency)} · ${escapeHtml(route)}</span></div><div><strong>${money.format(dollars(item.amountMinor))}</strong><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
+        })
+        .join("")
+    : '<div class="empty">No account-aware rules yet. Add salary, expenses, transfers, or debt payments to project them.</div>';
   $("#future-purchases-list").innerHTML = purchases.data.length
     ? purchases.data
         .map(
@@ -718,6 +851,15 @@ function timelineAccounts() {
       if (!seen.has(account.id)) seen.set(account.id, account);
   return [...seen.values()];
 }
+function accountIsLiability(account) {
+  return ["liability", "credit_card"].includes(account.accountType);
+}
+function accountColor(accountId) {
+  let hash = 0;
+  for (const character of accountId)
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return chartColors[hash % chartColors.length];
+}
 function initializeNetWorthAccountSelection() {
   const ids = new Set(timelineAccounts().map((account) => account.id));
   state.selectedNetWorthAccounts = new Set(
@@ -731,9 +873,9 @@ function initializeNetWorthAccountSelection() {
 function renderNetWorthAccountControls() {
   const accounts = timelineAccounts();
   $("#networth-account-toggles").innerHTML = accounts
-    .map((account, index) => {
+    .map((account) => {
       const checked = state.selectedNetWorthAccounts.has(account.id);
-      return `<label class="account-toggle"><input type="checkbox" data-networth-account="${escapeHtml(account.id)}" ${checked ? "checked" : ""}/><i style="background:${chartColors[index % chartColors.length]}"></i><span>${escapeHtml(account.name)}</span></label>`;
+      return `<label class="account-toggle ${accountIsLiability(account) ? "liability-account" : "asset-account"}"><input type="checkbox" data-networth-account="${escapeHtml(account.id)}" ${checked ? "checked" : ""}/><i style="--account-color:${accountColor(account.id)}"></i><span>${escapeHtml(account.name)} <small>${accountIsLiability(account) ? "liability" : "asset"}</small></span></label>`;
     })
     .join("");
 }
@@ -765,9 +907,14 @@ function showNetWorthAccountDetail(accountId, pointIndex) {
 function renderAccountNetWorthChart() {
   const timeline = state.netWorthTimeline,
     points = timeline?.points ?? [],
-    accounts = timelineAccounts().filter((account) =>
-      state.selectedNetWorthAccounts.has(account.id),
-    );
+    accounts = timelineAccounts()
+      .filter((account) => state.selectedNetWorthAccounts.has(account.id))
+      .sort(
+        (left, right) =>
+          Number(accountIsLiability(left)) -
+            Number(accountIsLiability(right)) ||
+          left.name.localeCompare(right.name),
+      );
   if (!points.length || !accounts.length) {
     $("#projection-chart").innerHTML =
       '<div class="empty">Select one or more accounts to draw the account breakdown.</div>';
@@ -822,8 +969,15 @@ function renderAccountNetWorthChart() {
     values
       .map((value, index) => `${index ? "L" : "M"}${x(index)},${y(value)}`)
       .join(" ");
+  const patternDefinitions = accounts
+    .filter(accountIsLiability)
+    .map(
+      (account) =>
+        `<pattern id="liability-${escapeHtml(account.id)}" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(35)"><rect width="8" height="8" fill="${accountColor(account.id)}" fill-opacity=".3"/><line x1="0" y1="0" x2="0" y2="8" stroke="${accountColor(account.id)}" stroke-width="3"/></pattern>`,
+    )
+    .join("");
   const areas = layers
-    .map((layer, index) => {
+    .map((layer) => {
       const area = `${path(layer.upper)} ${layer.lower
         .slice()
         .reverse()
@@ -838,7 +992,10 @@ function renderAccountNetWorthChart() {
           return `<circle class="account-hover-target" data-account-id="${escapeHtml(layer.account.id)}" data-point-index="${pointIndex}" cx="${x(pointIndex)}" cy="${y(layer.upper[pointIndex])}" r="9" tabindex="0"><title>${escapeHtml(layer.account.name)}\n${point.date}: ${money.format(dollars(value))}</title></circle>`;
         })
         .join("");
-      return `<g class="account-layer"><path d="${area}" style="fill:${chartColors[index % chartColors.length]};opacity:.58"><title>${escapeHtml(layer.account.name)}</title></path>${hoverPoints}</g>`;
+      const fill = accountIsLiability(layer.account)
+        ? `url(#liability-${escapeHtml(layer.account.id)})`
+        : accountColor(layer.account.id);
+      return `<g class="account-layer ${accountIsLiability(layer.account) ? "liability-layer" : "asset-layer"}"><path d="${area}" style="fill:${fill}"><title>${escapeHtml(layer.account.name)} · ${accountIsLiability(layer.account) ? "liability below zero" : "asset above zero"}</title></path>${hoverPoints}</g>`;
     })
     .join("");
   const tickValues = Array.from(
@@ -866,7 +1023,7 @@ function renderAccountNetWorthChart() {
         ? ""
         : `<line class="today-line" x1="${x(todayIndex)}" y1="${plot.top}" x2="${x(todayIndex)}" y2="${plot.bottom}"/><text class="today-label" x="${Math.min(plot.right - 45, x(todayIndex) + 8)}" y="${plot.top + 15}">Today</text>`;
   $("#projection-chart").innerHTML =
-    `<div class="chart-scroll"><svg viewBox="0 0 1200 470" role="img" aria-label="Stacked account balance history and projection">${grid}${areas}<line class="zero-line" x1="${plot.left}" y1="${y(0)}" x2="${plot.right}" y2="${y(0)}"/><path class="account-total-line" d="${totalLine}"/>${todayLine}${months}</svg></div><div class="chart-values"><span>${accounts.length} account${accounts.length === 1 ? "" : "s"} selected</span><span>Selected total: ${money.format(dollars(totals.at(-1)))}</span></div>`;
+    `<div class="chart-scroll"><svg viewBox="0 0 1200 470" role="img" aria-label="Diverging account composition with assets above zero and liabilities below zero"><defs>${patternDefinitions}</defs>${grid}${areas}<line class="zero-line" x1="${plot.left}" y1="${y(0)}" x2="${plot.right}" y2="${y(0)}"/><text class="account-side-label" x="${plot.left + 8}" y="${Math.max(plot.top + 16, y(0) - 10)}">Assets</text><text class="account-side-label" x="${plot.left + 8}" y="${Math.min(plot.bottom - 8, y(0) + 20)}">Liabilities</text><path class="account-total-line" d="${totalLine}"/>${todayLine}${months}</svg></div><div class="chart-values"><span>${accounts.length} account${accounts.length === 1 ? "" : "s"} selected · solid assets / striped liabilities</span><span>Selected net worth: ${money.format(dollars(totals.at(-1)))}</span></div>`;
   showNetWorthAccountDetail(accounts[0].id, points.length - 1);
 }
 function setNetWorthMode(mode) {
@@ -994,6 +1151,24 @@ function updateDirectionLabels() {
   $("#credit-direction-title").textContent = labels[2];
   $("#credit-direction-help").textContent = labels[3];
 }
+function updateProjectionRuleFields() {
+  const form = $("#projection-rule-form"),
+    type = form.elements.ruleType.value,
+    fromField = $("#projection-from-field"),
+    toField = $("#projection-to-field");
+  fromField.hidden = type === "income";
+  toField.hidden = type === "expense";
+  form.elements.fromAccountId.required = type !== "income";
+  form.elements.toAccountId.required = type !== "expense";
+  if (type === "income") form.elements.fromAccountId.value = "";
+  if (type === "expense") form.elements.toAccountId.value = "";
+  $("#projection-rule-help").textContent =
+    type === "income"
+      ? "Income increases the selected destination account."
+      : type === "expense"
+        ? "The expense reduces the selected source account; choosing a credit card increases the debt owed."
+        : "A transfer reduces the source and increases the destination. Use this for savings, debt payments, or moving money between accounts.";
+}
 function renderImportPreview() {
   const [headers, ...rows] = state.csv.rows;
   const index = importMapping(headers);
@@ -1056,11 +1231,37 @@ document.addEventListener("click", (event) => {
     selectMasterCategory(masterTarget.dataset.masterId);
     return;
   }
+  const transactionCheckbox = event.target.closest?.(".transaction-select");
+  if (transactionCheckbox && state.bulkEditMode) {
+    const index = state.transactions.findIndex(
+      (item) => item.id === transactionCheckbox.dataset.id,
+    );
+    selectTransactionAt(index, transactionCheckbox.checked, event.shiftKey);
+    return;
+  }
+  const transactionRow = event.target.closest?.("[data-transaction-row]");
+  if (
+    transactionRow &&
+    state.bulkEditMode &&
+    !event.target.closest("button,input,select,a")
+  ) {
+    const index = state.transactions.findIndex(
+      (item) => item.id === transactionRow.dataset.transactionRow,
+    );
+    selectTransactionAt(
+      index,
+      !state.selectedTransactionIds.has(transactionRow.dataset.transactionRow),
+      event.shiftKey,
+    );
+    return;
+  }
   const target = event.target.closest("button");
   if (!target) return;
   if (target.id === "clear-master-filter") {
     state.selectedMasterCategoryId = null;
     renderSpendingBreakdown();
+    renderFilteredActivityCards();
+    void loadTrend();
     return;
   }
   if (target.id === "nav-toggle") {
@@ -1086,6 +1287,62 @@ document.addEventListener("click", (event) => {
   }
   if (target.dataset.networthMode) {
     setNetWorthMode(target.dataset.networthMode);
+    return;
+  }
+  if (target.dataset.activityMode) {
+    setActivityMode(target.dataset.activityMode);
+    return;
+  }
+  if (target.id === "bulk-edit-toggle") {
+    setBulkEditMode(!state.bulkEditMode);
+    return;
+  }
+  if (target.id === "cancel-bulk-edit") {
+    setBulkEditMode(false);
+    return;
+  }
+  if (target.id === "select-page-transactions") {
+    state.transactions.forEach((item) =>
+      state.selectedTransactionIds.add(item.id),
+    );
+    void loadTransactions();
+    return;
+  }
+  if (target.id === "select-filtered-transactions") {
+    void run(async () => {
+      const result = await api(
+        `/api/v1/transactions/selection?${currentTransactionFilters()}`,
+      );
+      state.selectedTransactionIds = new Set(result.data);
+      notify(`${result.data.length} filtered transactions selected.`);
+      await loadTransactions();
+    });
+    return;
+  }
+  if (target.id === "apply-bulk-edit") {
+    void run(async () => {
+      const changes = {};
+      for (const [key, selector] of [
+        ["accountId", "#bulk-account"],
+        ["categoryId", "#bulk-category"],
+        ["transactionType", "#bulk-type"],
+        ["transactionDirection", "#bulk-direction"],
+      ])
+        if ($(selector).value) changes[key] = $(selector).value;
+      if (!Object.keys(changes).length)
+        return notify("Choose at least one field to change.", true);
+      const count = state.selectedTransactionIds.size;
+      if (!confirm(`Apply these changes to ${count} transactions?`)) return;
+      await api("/api/v1/transactions/bulk", {
+        method: "PATCH",
+        body: JSON.stringify({
+          ids: [...state.selectedTransactionIds],
+          changes,
+        }),
+      });
+      notify(`${count} transactions updated.`);
+      setBulkEditMode(false);
+    });
     return;
   }
   if (target.dataset.accountSelection) {
@@ -1127,6 +1384,11 @@ document.addEventListener("click", (event) => {
       const purchaseDate = $("#future-purchase-form").elements.purchaseDate;
       purchaseDate.min = tomorrow();
       purchaseDate.value = shiftYears(today(), 1);
+    }
+    if (target.dataset.dialog === "projection-rule-dialog") {
+      $("#projection-rule-form").reset();
+      $("#projection-rule-form").elements.startDate.value = today();
+      updateProjectionRuleFields();
     }
     dialog.showModal();
   }
@@ -1221,6 +1483,17 @@ document.addEventListener("click", (event) => {
       notify("Planned purchase deleted.");
       await loadNetWorth();
     });
+  if (
+    target.classList.contains("delete-projection-rule") &&
+    confirm("Delete this projection rule?")
+  )
+    void run(async () => {
+      await api(`/api/v1/projection-rules/${target.dataset.id}`, {
+        method: "DELETE",
+      });
+      notify("Projection rule deleted.");
+      await loadNetWorth();
+    });
 });
 
 document.addEventListener("change", (event) => {
@@ -1254,6 +1527,10 @@ document.addEventListener("change", (event) => {
     form.elements.transactionDirection.value =
       event.target.value === "income" ? "credit" : "debit";
     updateDirectionLabels();
+    return;
+  }
+  if (event.target.matches("#projection-rule-form [name='ruleType']")) {
+    updateProjectionRuleFields();
     return;
   }
   const typeSelect = event.target.closest("[data-import-type]");
@@ -1351,25 +1628,27 @@ $("#future-purchase-form").addEventListener("submit", (event) => {
     await loadNetWorth();
   });
 });
-$("#projection-form").addEventListener("submit", (event) => {
+$("#projection-rule-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const formElement = event.currentTarget;
   void run(async () => {
     const form = new FormData(formElement);
-    await api("/api/v1/projection", {
-      method: "PUT",
+    await api("/api/v1/projection-rules", {
+      method: "POST",
       body: JSON.stringify({
-        monthlyIncomeMinor: cents(form.get("monthlyIncome")),
-        monthlyExpenseMinor: cents(form.get("monthlyExpense")),
-        monthlySavingsMinor: cents(form.get("monthlySavings")),
-        annualAssetGrowthBps: 0,
-        annualLiabilityInterestBps: 0,
-        horizonMonths: projectionMonthsFromEndDate(
-          $("#networth-end-date").value,
-        ),
+        description: form.get("description"),
+        ruleType: form.get("ruleType"),
+        amountMinor: cents(form.get("amount")),
+        frequency: form.get("frequency"),
+        startDate: form.get("startDate"),
+        endDate: form.get("endDate") || null,
+        fromAccountId: form.get("fromAccountId") || null,
+        toAccountId: form.get("toAccountId") || null,
       }),
     });
-    notify("Projection assumptions saved.");
+    $("#projection-rule-dialog").close();
+    formElement.reset();
+    notify("Projection rule added.");
     await loadNetWorth();
   });
 });
@@ -1607,11 +1886,7 @@ $("#apply-networth-range").addEventListener(
 );
 $("#expense-trend-filter").addEventListener(
   "change",
-  () => void run(() => loadTrend("expense")),
-);
-$("#income-trend-filter").addEventListener(
-  "change",
-  () => void run(() => loadTrend("income")),
+  () => void run(() => loadTrend(state.activityMode)),
 );
 window.addEventListener("hashchange", () => void showView());
 $("#show-login").addEventListener("click", () => {

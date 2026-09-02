@@ -1,4 +1,4 @@
-# V7.5 code walkthrough
+# V7.6 code walkthrough
 
 This guide explains how the application works from the browser down to Cloudflare D1. Read it beside the source files. The inline comments identify important implementation boundaries; this guide explains how those boundaries connect.
 
@@ -16,6 +16,37 @@ For an authenticated screen load, the flow is:
 8. The frontend stores lookup rows in temporary `state` and renders the selected tab.
 
 The browser never connects to D1 directly and contains no database credentials.
+
+## V7.6 feature flow
+
+### Bulk transaction edits
+
+The Transactions page enters selection mode before it permits a bulk change.
+`state.selectedTransactionIds` is a `Set`, so selecting the same row twice
+removes it without creating duplicate IDs. A normal or Ctrl-click toggles one
+row; Shift-click selects the inclusive range from the last selected row.
+"Select all filtered" asks the API for IDs matching the active date, account,
+category, type, and search filters. `PATCH /api/v1/transactions/bulk` accepts at
+most 500 unique IDs, verifies that every record belongs to the signed-in user,
+validates referenced accounts/categories, and executes parameterized D1 updates
+as a batch. Balance effects are recalculated whenever type or direction changes.
+
+### Monthly Activity
+
+One shared activity model renders either expenses or income. The selected master
+category is stored once, then applied to the ranked-category bars, account bars,
+budget/target rows, and trend request. Bar widths use `amount / largest amount`;
+there is no artificial minimum and the visible labels are dollar values only.
+
+### Account-aware net-worth projections
+
+Migration `0009_projection_rules.sql` stores recurring income, expense, and
+transfer rules with optional source and destination account foreign keys. The
+timeline applies each occurrence to those real accounts: income adds to its
+destination, expenses reduce their source, and transfers subtract from one
+account while adding to another. The account chart stacks assets above zero and
+liabilities below zero, using striped liability fills to make the sign visually
+unambiguous. The separate total-net-worth line shows their combined result.
 
 ## 2. Frontend files
 
@@ -172,9 +203,9 @@ This module contains pure projection calculations. It does not access D1, the cl
 - With no snapshot, it accumulates known effects.
 
 `buildNetWorthTimeline()` creates actual values through today, then projects
-forward using payments, liability interest, equity, dividends, monthly
-contributions, and planned purchases. Every point includes both fixed/liquid
-totals and individual account balances for the two chart modes.
+forward using account-aware recurring rules, equity, dividends, and planned
+purchases. Every point includes both fixed/liquid totals and individual account
+balances for the two chart modes.
 
 ### `worker/src/http.ts`
 
@@ -200,6 +231,8 @@ Migrations are applied in numerical order and should never be edited after produ
 - `0006`: signed transaction balance effects and future purchases.
 - `0007`: users, sessions, rate-limit attempts, and full tenant-aware table rebuild.
 - `0008`: debit/credit transaction direction plus an index for signed reports.
+- `0009`: recurring account-aware projection rules with tenant-safe account
+  foreign keys.
 
 Migration 0007 gives each financial table a `user_id`. Composite foreign keys such as `(account_id,user_id)` prevent one user's transaction from referencing another user's account. Uniqueness is per user, allowing two people to both create an account named “Chequing.”
 

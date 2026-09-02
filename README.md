@@ -1,6 +1,28 @@
-# R&R Budget v7.5
+# R&R Budget v7.6
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.6 changes
+
+- Adds bulk transaction editing with page selection, all-filtered selection,
+  checkboxes, Shift range selection, and Ctrl/click toggling. Up to 500 selected
+  transactions can have account, category, type, or debit/credit direction
+  changed in one controlled request.
+- Makes Monthly Activity switch between Expenses and Income without duplicating
+  the page. The master-category donut now filters ranked categories, account
+  totals, budget/target tracking, and the trend chart in either mode.
+- Sizes category and account bars proportionally to their dollar values and
+  displays dollar labels only—no percentages on the bars.
+- Rebuilds the by-account net-worth chart around a zero line: assets stack above
+  zero in solid colours, liabilities stack below zero with striped fills, and
+  the total net-worth line remains visible over both.
+- Adds account-aware recurring projection rules for income, expenses, and
+  transfers. Rules post projected money to real accounts rather than a synthetic
+  projected-cash-flow account.
+- Removes the fixed-height Monthly Activity trend area so cards shrink with the
+  chart at narrow widths.
+- Adds migration `0009_projection_rules.sql`; V7.5 remains unchanged in its
+  separate directory.
 
 ## V7.5 changes
 
@@ -55,7 +77,7 @@ A private, multi-user budget and net-worth application inspired by `R&R Expenses
 - `database/`: forward-only Cloudflare D1 migrations and invented development seeds
 - `.github/workflows/`: pull-request checks and main-branch production deployment
 
-The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.5 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
+The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.6 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
 
 For a detailed, file-by-file explanation, read [`CODE_WALKTHROUGH.md`](CODE_WALKTHROUGH.md).
 
@@ -93,11 +115,11 @@ The workbook contained broken and Excel-version-sensitive formulas. The app does
 - Transfers are excluded from income and expense totals.
 - Liability balance snapshots are negative; the projection converts their magnitude to a positive liability total.
 - Dates use `YYYY-MM-DD`. Calendar-month selection uses the `America/Edmonton` timezone in the frontend.
-- Projection: each account uses fixed/liquid classification plus its payment,
-  interest, equity, and dividend settings. The timeline can show either stacked
-  fixed/liquid net worth or individual account layers. The overall plan also
-  receives `monthly income - monthly expenses + additional savings`. It is a
-  planning estimate, not financial advice.
+- Projection: each account uses fixed/liquid classification plus its equity and
+  dividend settings. Explicit recurring rules route projected income, expenses,
+  and transfers through selected accounts. The timeline can show either stacked
+  fixed/liquid net worth or individual account layers. It is a planning estimate,
+  not financial advice.
 - The full-width timeline displays monthly currency values, gridlines, tooltips, historical/projected styling, and a today marker.
 - Historical net worth starts from dated account balance snapshots and applies each transaction's signed balance effect. Expenses reduce balances and income raises balances. Imported debit/credit signs are preserved; legacy transfers with no known direction are excluded rather than guessed.
 - Future purchases reduce the selected account on their planned date. The timeline uses solid historical lines, dashed projected lines, and a vertical marker for today.
