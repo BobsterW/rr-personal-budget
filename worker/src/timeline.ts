@@ -59,8 +59,11 @@ export function timelineDates(
   startDate: string,
   endDate: string,
   today: string,
+  anchorDates: string[] = [],
 ): string[] {
   const dates = new Set([startDate, endDate]);
+  for (const date of anchorDates)
+    if (date >= startDate && date <= endDate) dates.add(date);
   if (today >= startDate && today <= endDate) dates.add(today);
   const cursor = utc(`${startDate.slice(0, 7)}-01`);
   cursor.setUTCMonth(cursor.getUTCMonth() + 1);
@@ -206,11 +209,19 @@ export function buildNetWorthTimeline(
   today: string,
   projectionRules: ProjectionRule[] = [],
 ): TimelinePoint[] {
-  const dates = timelineDates(startDate, endDate, today);
+  const dates = timelineDates(
+    startDate,
+    endDate,
+    today,
+    snapshots.map((snapshot) => snapshot.date),
+  );
+  const actualSnapshots = snapshots.filter(
+    (snapshot) => snapshot.date <= today,
+  );
   const balances = new Map(
     accounts.map((account) => [
       account.id,
-      balanceAt(today, account.id, snapshots, effects),
+      balanceAt(today, account.id, actualSnapshots, effects),
     ]),
   );
   const result: TimelinePoint[] = dates
@@ -219,7 +230,7 @@ export function buildNetWorthTimeline(
       const historical = new Map(
         accounts.map((account) => [
           account.id,
-          balanceAt(date, account.id, snapshots, effects),
+          balanceAt(date, account.id, actualSnapshots, effects),
         ]),
       );
       return {
@@ -260,6 +271,11 @@ export function buildNetWorthTimeline(
     // Recurring income, expenses, transfers, and debt payments now affect the
     // selected real accounts instead of an invented projected-cash-flow layer.
     applyProjectionRules(balances, projectionRules, previous, date);
+    // A dated account balance is authoritative. Projection variables run up to
+    // the anchor, the balance is reset, and subsequent variables continue from
+    // the newly supplied value.
+    for (const snapshot of snapshots.filter((item) => item.date === date))
+      balances.set(snapshot.accountId, snapshot.balanceMinor);
     result.push({
       date,
       phase: "projected",

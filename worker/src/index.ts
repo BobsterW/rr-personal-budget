@@ -49,6 +49,7 @@ const ACCOUNT_TYPES = new Set<AccountType>([
 ]);
 const TRANSACTION_TYPES = new Set<TransactionType>([
   "expense",
+  "refund",
   "income",
   "transfer",
   "adjustment",
@@ -562,6 +563,41 @@ async function route(request: Request, env: Env): Promise<Response> {
       requireDate(url.searchParams.get("endDate"), "endDate");
     return json({ data: await repo.listTransactionIds(url.searchParams) });
   }
+  if (path === "/api/v1/transactions/bulk" && method === "DELETE") {
+    const body = assertObject(await readJson(request));
+    if (
+      !Array.isArray(body.ids) ||
+      body.ids.length < 1 ||
+      body.ids.length > 500 ||
+      body.ids.some((id) => typeof id !== "string" || !id)
+    )
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "ids must contain between 1 and 500 transaction IDs.",
+      );
+    const ids = [...new Set(body.ids as string[])];
+    if (ids.length !== body.ids.length)
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Transaction IDs must not be repeated.",
+      );
+    const deleted = await repo.bulkDeleteTransactions(ids);
+    if (deleted < 0)
+      throw new ApiError(
+        404,
+        "NOT_FOUND",
+        "One or more selected transactions no longer exist.",
+      );
+    if (deleted !== ids.length)
+      throw new ApiError(
+        409,
+        "BULK_DELETE_INCOMPLETE",
+        "One or more selected transactions changed. Refresh and try again.",
+      );
+    return json({ data: { deleted } });
+  }
   if (path === "/api/v1/transactions/bulk" && method === "PATCH") {
     const body = assertObject(await readJson(request));
     if (
@@ -805,11 +841,17 @@ async function route(request: Request, env: Env): Promise<Response> {
       throw new ApiError(404, "NOT_FOUND", "Future purchase not found.");
     return new Response(null, { status: 204 });
   }
+  const projectionRuleMatch = path.match(
+    /^\/api\/v1\/projection-rules\/([^/]+)$/,
+  );
   if (path === "/api/v1/projection-rules" && method === "GET")
     return json({
       data: (await repo.listProjectionRules()).map((row) => toCamel(row)),
     });
-  if (path === "/api/v1/projection-rules" && method === "POST") {
+  if (
+    (path === "/api/v1/projection-rules" && method === "POST") ||
+    (projectionRuleMatch && method === "PUT")
+  ) {
     const body = assertObject(await readJson(request)),
       description = requireString(body, "description"),
       ruleType = requireString(body, "ruleType") as ProjectionRuleType,
@@ -885,7 +927,7 @@ async function route(request: Request, env: Env): Promise<Response> {
           "A selected account does not exist or is archived.",
         );
     }
-    const record = await repo.createProjectionRule({
+    const input = {
       description,
       ruleType,
       amountMinor: Number(body.amountMinor),
@@ -894,12 +936,17 @@ async function route(request: Request, env: Env): Promise<Response> {
       endDate,
       fromAccountId,
       toAccountId,
-    });
-    return json({ data: toCamel(record as Record<string, unknown>) }, 201);
+    };
+    const record = projectionRuleMatch
+      ? await repo.updateProjectionRule(projectionRuleMatch[1]!, input)
+      : await repo.createProjectionRule(input);
+    if (!record)
+      throw new ApiError(404, "NOT_FOUND", "Projection rule not found.");
+    return json(
+      { data: toCamel(record as Record<string, unknown>) },
+      projectionRuleMatch ? 200 : 201,
+    );
   }
-  const projectionRuleMatch = path.match(
-    /^\/api\/v1\/projection-rules\/([^/]+)$/,
-  );
   if (projectionRuleMatch && method === "DELETE") {
     if (!(await repo.deleteProjectionRule(projectionRuleMatch[1]!)))
       throw new ApiError(404, "NOT_FOUND", "Projection rule not found.");
@@ -1051,6 +1098,19 @@ async function route(request: Request, env: Env): Promise<Response> {
       201,
     );
   }
+  const balanceSnapshotMatch = path.match(
+    /^\/api\/v1\/balance-snapshots\/([^/]+)$/,
+  );
+  if (balanceSnapshotMatch && method === "DELETE") {
+    const result = await env.DB.prepare(
+      "DELETE FROM balance_snapshots WHERE id=? AND user_id=?",
+    )
+      .bind(balanceSnapshotMatch[1], user.id)
+      .run();
+    if (!result.meta.changes)
+      throw new ApiError(404, "NOT_FOUND", "Account balance not found.");
+    return new Response(null, { status: 204 });
+  }
 
   if (path === "/api/v1/projection" && method === "GET") {
     const row = await env.DB.prepare(
@@ -1144,11 +1204,11 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/v1/imports" && method === "POST") {
     const body = assertObject(await readJson(request));
     const rows = body.rows;
-    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 500)
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 40)
       throw new ApiError(
         422,
         "VALIDATION_ERROR",
-        "rows must contain 1–500 transactions.",
+        "rows must contain 1–40 transactions.",
       );
     const accountId = requireString(body, "accountId"),
       fileName = requireString(body, "fileName", 200),
@@ -1159,9 +1219,62 @@ async function route(request: Request, env: Env): Promise<Response> {
       rejected = 0;
     const errors: Array<{ row: number; message: string }> = [];
     const statements: D1PreparedStatement[] = [];
+    const refundCategories = new Map<number, string>();
+    for (const raw of rows) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const candidate = raw as Record<string, unknown>;
+      if (
+        candidate.transactionType === "expense" &&
+        candidate.transactionDirection === "debit" &&
+        Number.isSafeInteger(candidate.amountMinor) &&
+        typeof candidate.categoryId === "string"
+      )
+        refundCategories.set(
+          Number(candidate.amountMinor),
+          candidate.categoryId,
+        );
+    }
+    const incomingAmounts = [
+      ...new Set(
+        rows
+          .filter(
+            (raw): raw is Record<string, unknown> =>
+              Boolean(raw) && typeof raw === "object" && !Array.isArray(raw),
+          )
+          .filter(
+            (candidate) =>
+              candidate.transactionType === "income" &&
+              candidate.transactionDirection === "credit" &&
+              Number.isSafeInteger(candidate.amountMinor),
+          )
+          .map((candidate) => Number(candidate.amountMinor)),
+      ),
+    ];
+    if (incomingAmounts.length) {
+      const placeholders = incomingAmounts.map(() => "?").join(",");
+      const matches = await env.DB.prepare(
+        `SELECT amount_minor,category_id FROM transactions WHERE user_id=? AND account_id=? AND transaction_type='expense' AND amount_minor IN (${placeholders}) ORDER BY transaction_date DESC`,
+      )
+        .bind(user.id, accountId, ...incomingAmounts)
+        .all<{ amount_minor: number; category_id: string }>();
+      for (const match of matches.results)
+        if (!refundCategories.has(match.amount_minor))
+          refundCategories.set(match.amount_minor, match.category_id);
+    }
     for (const [index, raw] of rows.entries()) {
       const candidate = assertObject(raw);
       candidate.accountId = accountId;
+      const refundCategory = refundCategories.get(
+        Number(candidate.amountMinor),
+      );
+      if (
+        refundCategory &&
+        candidate.transactionType === "income" &&
+        candidate.transactionDirection === "credit"
+      ) {
+        candidate.transactionType = "refund";
+        candidate.categoryId = refundCategory;
+      }
       const validation = validateTransaction(candidate);
       if (!validation.data || validation.data.currency !== env.BASE_CURRENCY) {
         rejected += 1;

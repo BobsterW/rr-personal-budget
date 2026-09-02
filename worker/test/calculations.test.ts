@@ -62,6 +62,23 @@ describe("monthly totals", () => {
       netCashFlowMinor: 15_000,
     });
   });
+
+  it("charges the refund type against expenses", () => {
+    expect(
+      monthlyTotals([
+        {
+          transaction_type: "expense",
+          transaction_direction: "debit",
+          amount_minor: 10_000,
+        },
+        {
+          transaction_type: "refund",
+          transaction_direction: "credit",
+          amount_minor: 4_000,
+        },
+      ]),
+    ).toMatchObject({ expenseMinor: 6_000, netCashFlowMinor: -6_000 });
+  });
 });
 describe("projection", () => {
   it("is deterministic and includes month zero", () => {

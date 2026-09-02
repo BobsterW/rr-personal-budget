@@ -1,6 +1,11 @@
 /* Shared domain contracts. Monetary values are integer cents and rates are
  * basis points, avoiding floating-point rounding in storage and calculations. */
-export type TransactionType = "expense" | "income" | "transfer" | "adjustment";
+export type TransactionType =
+  | "expense"
+  | "refund"
+  | "income"
+  | "transfer"
+  | "adjustment";
 export type TransactionDirection = "debit" | "credit";
 export type AccountType =
   | "cash"

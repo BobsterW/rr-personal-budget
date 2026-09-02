@@ -42,4 +42,18 @@ describe("transaction validation", () => {
     expect(result.issues).toHaveLength(0);
     expect(result.data?.transactionDirection).toBe("credit");
   });
+
+  it("accepts a first-class refund type", () => {
+    const result = validateTransaction({
+      transactionDate: "2026-09-02",
+      categoryId: "shopping",
+      accountId: "card",
+      vendorName: "Returned purchase",
+      amountMinor: 2_500,
+      transactionType: "refund",
+      transactionDirection: "credit",
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.data?.transactionType).toBe("refund");
+  });
 });

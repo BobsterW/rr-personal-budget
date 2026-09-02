@@ -170,6 +170,8 @@ export function monthlyTotals(
           row.transaction_direction === "credit"
             ? -row.amount_minor
             : row.amount_minor;
+      if (row.transaction_type === "refund")
+        totals.expenseMinor -= row.amount_minor;
       if (row.transaction_type === "income")
         totals.incomeMinor +=
           row.transaction_direction === "debit"

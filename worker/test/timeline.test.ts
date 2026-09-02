@@ -168,4 +168,63 @@ describe("net-worth timeline", () => {
     expect(value("2027-04-01")).toBe(4_000_000);
     expect(value("2027-07-01")).toBe(3_200_000);
   });
+
+  it("uses future balances as authoritative anchors and continues variables", () => {
+    const growingAccount = [
+      {
+        ...accounts[0]!,
+        annualEquityGainMinor: 120_000,
+      },
+    ];
+    const points = buildNetWorthTimeline(
+      growingAccount,
+      [{ accountId: "cash", date: "2027-12-15", balanceMinor: 50_000_000 }],
+      [],
+      [],
+      assumptions,
+      "2026-09-01",
+      "2028-12-15",
+      "2026-09-01",
+    );
+    const at = (date: string) =>
+      points.find((point) => point.date === date)?.accounts[0]?.balanceMinor;
+    expect(at("2026-09-01")).toBe(0);
+    expect(at("2027-12-15")).toBe(50_000_000);
+    expect(at("2028-12-15")).toBe(50_120_246);
+  });
+
+  it("resets the projection at every later balance entry", () => {
+    const points = buildNetWorthTimeline(
+      accounts,
+      [
+        { accountId: "cash", date: "2026-09-01", balanceMinor: 100_000 },
+        { accountId: "cash", date: "2026-10-15", balanceMinor: 250_000 },
+        { accountId: "cash", date: "2026-11-15", balanceMinor: 400_000 },
+      ],
+      [],
+      [],
+      assumptions,
+      "2026-09-01",
+      "2026-12-01",
+      "2026-09-01",
+      [
+        {
+          id: "income",
+          description: "Income",
+          ruleType: "income",
+          amountMinor: 10_000,
+          frequency: "monthly",
+          startDate: "2026-09-15",
+          endDate: null,
+          fromAccountId: null,
+          toAccountId: "cash",
+        },
+      ],
+    );
+    const at = (date: string) =>
+      points.find((point) => point.date === date)?.accounts[0]?.balanceMinor;
+    expect(at("2026-10-15")).toBe(250_000);
+    expect(at("2026-11-15")).toBe(400_000);
+    expect(at("2026-12-01")).toBe(400_000);
+  });
 });

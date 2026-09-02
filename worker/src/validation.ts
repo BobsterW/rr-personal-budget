@@ -10,6 +10,7 @@ import type {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TYPES = new Set<TransactionType>([
   "expense",
+  "refund",
   "income",
   "transfer",
   "adjustment",
@@ -73,7 +74,7 @@ export function validateTransaction(value: unknown): {
   )
     issues.push({
       field: "transactionType",
-      message: "Use expense, income, transfer, or adjustment.",
+      message: "Use expense, refund, income, transfer, or adjustment.",
     });
   if (
     typeof body.transactionDirection !== "string" ||

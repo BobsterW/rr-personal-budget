@@ -186,6 +186,7 @@
             >Type<select id="transaction-type-filter">
               <option value="">All types</option>
               <option>expense</option>
+              <option>refund</option>
               <option>income</option>
               <option>transfer</option>
               <option>adjustment</option>
@@ -223,17 +224,13 @@
             >Type<select id="bulk-type">
               <option value="">No change</option>
               <option>expense</option>
+              <option>refund</option>
               <option>income</option>
               <option>transfer</option>
               <option>adjustment</option>
             </select></label
-          ><label
-            >Direction<select id="bulk-direction">
-              <option value="">No change</option>
-              <option value="debit">Money out</option>
-              <option value="credit">Money in / refund</option>
-            </select></label
           ><button id="apply-bulk-edit">Apply changes</button>
+          <button class="danger" id="delete-bulk-transactions">Delete</button>
           <button class="secondary" id="cancel-bulk-edit">Cancel</button>
         </div>
         <div class="panel table-wrap">
@@ -502,7 +499,7 @@
           ></div>
           <p class="fine-print">
             History uses balance snapshots plus transaction balance effects.
-            Transfers without a known debit/credit direction are excluded.
+            Transfers without a known signed balance effect are excluded.
           </p>
         </section>
         <section class="panel projection-assumptions-panel">
@@ -526,7 +523,7 @@
           </p>
         </section>
         <section class="panel">
-          <h2>Balance history</h2>
+          <h2>Account Balance</h2>
           <div class="table-wrap">
             <table>
               <thead>
@@ -535,6 +532,7 @@
                   <th>Account</th>
                   <th>Type</th>
                   <th class="money">Balance</th>
+                  <th><span class="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody id="balances-body"></tbody>
@@ -652,37 +650,12 @@
           ><label
             >Type<select name="transactionType" required>
               <option>expense</option>
+              <option>refund</option>
               <option>income</option>
               <option>transfer</option>
               <option>adjustment</option>
             </select></label
           >
-          <fieldset class="direction-field wide">
-            <legend>Money direction</legend>
-            <label class="direction-option">
-              <input
-                type="radio"
-                name="transactionDirection"
-                value="debit"
-                checked
-              />
-              <span
-                ><strong id="debit-direction-title">− Money out</strong
-                ><small id="debit-direction-help"
-                  >Purchase or charge</small
-                ></span
-              >
-            </label>
-            <label class="direction-option">
-              <input type="radio" name="transactionDirection" value="credit" />
-              <span
-                ><strong id="credit-direction-title">+ Money in</strong
-                ><small id="credit-direction-help"
-                  >Refund or credit</small
-                ></span
-              >
-            </label>
-          </fieldset>
           <label>Category<select name="categoryId" required></select></label
           ><label>Account/card<select name="accountId" required></select></label
           ><label
@@ -738,7 +711,7 @@
     <dialog id="projection-rule-dialog">
       <form id="projection-rule-form">
         <div class="dialog-heading">
-          <h2>Add Projection Rule</h2>
+          <h2 id="projection-rule-title">Add Projection Rule</h2>
           <button
             type="button"
             class="icon secondary"
@@ -748,6 +721,7 @@
             ×
           </button>
         </div>
+        <input type="hidden" name="id" />
         <div class="form-grid">
           <label class="wide"
             >Description<input
@@ -921,7 +895,7 @@
         </div>
       </form>
     </dialog>
-    <script src="config.js?v=7.7.0"></script>
-    <script type="module" src="app.js?v=7.7.0"></script>
+    <script src="config.js?v=7.8.0"></script>
+    <script type="module" src="app.js?v=7.8.0"></script>
   </body>
 </html>
