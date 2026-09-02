@@ -584,6 +584,10 @@ export class BudgetRepository {
       const q = `%${params.get("search")} %`.replace(" %", "%");
       bindings.push(q, q);
     }
+    if (params.get("vendor")) {
+      clauses.push("t.vendor_name LIKE ?");
+      bindings.push(`%${params.get("vendor")}%`);
+    }
     const page = Math.max(1, Number(params.get("page") ?? 1) || 1);
     const pageSize = Math.min(
       100,
@@ -694,6 +698,8 @@ export class BudgetRepository {
     const filters: Array<[string, string]> = [
       ["startDate", "t.transaction_date >="],
       ["endDate", "t.transaction_date <="],
+      ["categoryId", "t.category_id ="],
+      ["accountId", "t.account_id ="],
       ["type", "t.transaction_type ="],
     ];
     for (const [key, sql] of filters) {
@@ -707,6 +713,10 @@ export class BudgetRepository {
       clauses.push("(t.vendor_name LIKE ? OR t.description LIKE ?)");
       const query = `%${params.get("search")}%`;
       bindings.push(query, query);
+    }
+    if (params.get("vendor")) {
+      clauses.push("t.vendor_name LIKE ?");
+      bindings.push(`%${params.get("vendor")}%`);
     }
     const rows = await this.db
       .prepare(
@@ -870,6 +880,7 @@ export class BudgetRepository {
     type: "expense" | "income",
     categoryId?: string,
     masterCategoryId?: string,
+    accountId?: string,
   ) {
     const clauses = [
       "t.user_id=?",
@@ -884,6 +895,10 @@ export class BudgetRepository {
     if (masterCategoryId) {
       clauses.push("c.master_category_id=?");
       bindings.push(masterCategoryId);
+    }
+    if (accountId) {
+      clauses.push("t.account_id=?");
+      bindings.push(accountId);
     }
     const actualRows = await this.db
       .prepare(

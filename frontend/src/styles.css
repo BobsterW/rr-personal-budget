@@ -542,6 +542,43 @@ td {
   width: 10px;
   height: 10px;
   border-radius: 50%;
+  background: var(--account-color);
+}
+.account-color-0 {
+  --account-color: #185b45;
+}
+.account-color-1 {
+  --account-color: #8aa32b;
+}
+.account-color-2 {
+  --account-color: #d79039;
+}
+.account-color-3 {
+  --account-color: #396f8f;
+}
+.account-color-4 {
+  --account-color: #91649b;
+}
+.account-color-5 {
+  --account-color: #bd5e50;
+}
+.account-color-6 {
+  --account-color: #4c8d77;
+}
+.account-color-7 {
+  --account-color: #a77d42;
+}
+.account-color-8 {
+  --account-color: #2563a6;
+}
+.account-color-9 {
+  --account-color: #b54773;
+}
+.account-color-10 {
+  --account-color: #6f7f2c;
+}
+.account-color-11 {
+  --account-color: #7a5d3b;
 }
 .donut-legend-item strong {
   font-variant-numeric: tabular-nums;
@@ -561,7 +598,8 @@ td {
   border-radius: 10px;
 }
 .ranked-category-row:hover,
-.ranked-category-row:focus-visible {
+.ranked-category-row:focus-visible,
+.ranked-category-row.selected {
   background: rgba(24, 91, 69, 0.055);
   outline: 2px solid rgba(207, 232, 107, 0.65);
 }
@@ -583,19 +621,32 @@ td {
   font-variant-numeric: tabular-nums;
 }
 .ranked-track {
+  display: block;
+  width: 100%;
   height: 12px;
+  appearance: none;
+  border: 0;
   overflow: hidden;
   border-radius: 99px;
   background: #e7e3d9;
 }
-.ranked-track span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--green), #4c8d77);
+.ranked-track::-webkit-progress-bar,
+.bar-track::-webkit-progress-bar {
+  background: #e7e3d9;
+  border-radius: 99px;
 }
-.is-refund-total .ranked-track span,
-.bar-row.is-refund-total .bar-fill {
+.ranked-track::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--green), #4c8d77);
+  border-radius: 99px;
+}
+.ranked-track::-moz-progress-bar {
+  background: linear-gradient(90deg, var(--green), #4c8d77);
+  border-radius: 99px;
+}
+.is-refund-total .ranked-track::-webkit-progress-value,
+.bar-row.is-refund-total .bar-track::-webkit-progress-value,
+.is-refund-total .ranked-track::-moz-progress-bar,
+.bar-row.is-refund-total .bar-track::-moz-progress-bar {
   background: #61a989;
 }
 .category-tooltip {
@@ -628,16 +679,36 @@ td {
   gap: 10px;
   align-items: center;
 }
+.activity-account-row {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.activity-account-row:hover,
+.activity-account-row:focus-visible,
+.activity-account-row.selected {
+  border-color: var(--line);
+  background: rgba(24, 91, 69, 0.055);
+  filter: none;
+}
 .bar-track {
+  width: 100%;
   height: 10px;
+  appearance: none;
+  border: 0;
   border-radius: 100px;
   background: #e7e3d9;
   overflow: hidden;
 }
-.bar-fill {
-  height: 100%;
+.bar-track::-webkit-progress-value,
+.bar-track::-moz-progress-bar {
   background: var(--lime);
-  border-radius: inherit;
+  border-radius: 99px;
 }
 .form-grid {
   display: grid;
@@ -747,6 +818,8 @@ td {
 }
 .total-line {
   stroke: #8aa32b;
+  stroke-width: 7;
+  filter: drop-shadow(0 1px 1px rgba(16, 37, 29, 0.3));
 }
 .zero-line {
   stroke: var(--line);
@@ -858,8 +931,15 @@ td {
   font-weight: 600;
 }
 .account-layer path {
-  opacity: 0.72;
+  opacity: 0.82;
   transition: opacity 150ms ease;
+}
+.account-layer.series-selected path {
+  opacity: 1;
+  filter: saturate(1.2);
+}
+.account-layer.series-muted path {
+  opacity: 0.3;
 }
 .account-layer:hover path {
   opacity: 0.94 !important;
@@ -883,8 +963,37 @@ td {
 .account-total-line {
   fill: none;
   stroke: var(--ink);
-  stroke-width: 3;
+  stroke-width: 6;
   vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 1px 1px rgba(16, 37, 29, 0.35));
+  cursor: pointer;
+}
+.account-total-line.series-muted {
+  opacity: 0.45;
+}
+.account-total-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.account-series-path {
+  cursor: pointer;
+  outline: none;
+}
+.account-series-path:focus-visible {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+.account-series-value {
+  font-size: 9px;
+  font-weight: 800;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 .account-chart-detail {
   display: grid;
@@ -1099,14 +1208,6 @@ td {
   fill: var(--ink);
   font-size: 12px;
   font-weight: 700;
-}
-.future-purchase {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
 }
 .projection-rules-list {
   display: grid;

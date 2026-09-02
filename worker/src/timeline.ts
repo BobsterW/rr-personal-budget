@@ -139,16 +139,36 @@ function ruleActiveDuring(rule: ProjectionRule, from: string, to: string) {
   return rule.startDate <= to && (!rule.endDate || rule.endDate > from);
 }
 
+function scheduledDate(
+  startDate: string,
+  frequency: "monthly" | "yearly",
+  occurrence: number,
+) {
+  const start = utc(startDate),
+    year = start.getUTCFullYear() + (frequency === "yearly" ? occurrence : 0),
+    month = start.getUTCMonth() + (frequency === "monthly" ? occurrence : 0),
+    normalizedYear = year + Math.floor(month / 12),
+    normalizedMonth = ((month % 12) + 12) % 12,
+    lastDay = new Date(
+      Date.UTC(normalizedYear, normalizedMonth + 1, 0),
+    ).getUTCDate(),
+    day = Math.min(start.getUTCDate(), lastDay);
+  return new Date(Date.UTC(normalizedYear, normalizedMonth, day))
+    .toISOString()
+    .slice(0, 10);
+}
+
 function ruleAmount(rule: ProjectionRule, from: string, to: string) {
   if (!ruleActiveDuring(rule, from, to)) return 0;
   if (rule.frequency === "once")
     return rule.startDate > from && rule.startDate <= to ? rule.amountMinor : 0;
-  const activeFrom = rule.startDate > from ? rule.startDate : from;
-  const activeTo = rule.endDate && rule.endDate < to ? rule.endDate : to;
-  const months = daysBetween(activeFrom, activeTo) / 30.4375;
-  return (
-    rule.amountMinor * (rule.frequency === "monthly" ? months : months / 12)
-  );
+  let count = 0;
+  for (let occurrence = 0; occurrence < 2_400; occurrence += 1) {
+    const date = scheduledDate(rule.startDate, rule.frequency, occurrence);
+    if (date > to || (rule.endDate && date > rule.endDate)) break;
+    if (date > from) count += 1;
+  }
+  return rule.amountMinor * count;
 }
 
 function applyProjectionRules(
