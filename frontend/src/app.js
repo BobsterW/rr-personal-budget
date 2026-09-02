@@ -227,6 +227,12 @@ function refreshSelects() {
   $("#transaction-account-filter").innerHTML =
     '<option value="">All accounts</option>' + optionList(state.accounts);
 }
+function refreshTransactionCategoryOptions(type, selected = "") {
+  const kind = type === "refund" ? "expense" : type;
+  const categories = state.categories.filter((item) => item.kind === kind);
+  const select = $('#transaction-form select[name="categoryId"]');
+  select.innerHTML = optionList(categories, selected);
+}
 
 async function loadLookups() {
   const [categories, accounts, masterCategories, categoryRules] =
@@ -291,19 +297,14 @@ async function loadTransactions() {
   state.total = result.pagination.total;
   $("#transactions-body").innerHTML = state.transactions
     .map((item) => {
-      const direction = item.transactionDirection ?? "debit";
+      const direction =
+        item.transactionType === "refund"
+          ? "credit"
+          : (item.transactionDirection ?? "debit");
       const signedMinor =
         direction === "credit" ? item.amountMinor : -item.amountMinor;
-      const directionName =
-        item.transactionType === "expense" && direction === "credit"
-          ? "Refund"
-          : item.transactionType === "income" && direction === "debit"
-            ? "Reversal"
-            : direction === "credit"
-              ? "Money in"
-              : "Money out";
       const selected = state.selectedTransactionIds.has(item.id);
-      return `<tr class="transaction-${direction} ${selected ? "bulk-selected" : ""}" data-transaction-row="${escapeHtml(item.id)}"><td class="bulk-select-column" data-label="Select" ${state.bulkEditMode ? "" : "hidden"}><input class="transaction-select" type="checkbox" data-id="${escapeHtml(item.id)}" aria-label="Select ${escapeHtml(item.vendorName)}" ${selected ? "checked" : ""}/></td><td data-label="Date">${escapeHtml(item.transactionDate)}</td><td data-label="Vendor"><strong>${escapeHtml(item.vendorName)}</strong>${item.description ? `<br><small>${escapeHtml(item.description)}</small>` : ""}</td><td data-label="Category">${escapeHtml(item.categoryName)}</td><td data-label="Account">${escapeHtml(item.accountName)}</td><td data-label="Type"><span class="pill">${escapeHtml(item.transactionType)}</span> <span class="pill direction-pill">${escapeHtml(directionName)}</span></td><td data-label="Amount" class="money signed-amount">${signedMinor > 0 ? "+" : "−"}${money.format(Math.abs(dollars(signedMinor)))}</td><td data-label="Actions" class="transaction-actions"><button class="secondary edit-transaction" data-id="${escapeHtml(item.id)}">Edit</button> <button class="secondary danger delete-transaction" data-id="${escapeHtml(item.id)}">Delete</button></td></tr>`;
+      return `<tr class="transaction-${direction} ${selected ? "bulk-selected" : ""}" data-transaction-row="${escapeHtml(item.id)}"><td class="bulk-select-column" data-label="Select" ${state.bulkEditMode ? "" : "hidden"}><input class="transaction-select" type="checkbox" data-id="${escapeHtml(item.id)}" aria-label="Select ${escapeHtml(item.vendorName)}" ${selected ? "checked" : ""}/></td><td data-label="Date">${escapeHtml(item.transactionDate)}</td><td data-label="Vendor"><strong>${escapeHtml(item.vendorName)}</strong>${item.description ? `<br><small>${escapeHtml(item.description)}</small>` : ""}</td><td data-label="Category">${escapeHtml(item.categoryName)}</td><td data-label="Account">${escapeHtml(item.accountName)}</td><td data-label="Type"><span class="pill">${escapeHtml(item.transactionType)}</span></td><td data-label="Amount" class="money signed-amount">${signedMinor > 0 ? "+" : "−"}${money.format(Math.abs(dollars(signedMinor)))}</td><td data-label="Actions" class="transaction-actions"><button class="secondary edit-transaction" data-id="${escapeHtml(item.id)}">Edit</button> <button class="secondary danger delete-transaction" data-id="${escapeHtml(item.id)}">Delete</button></td></tr>`;
     })
     .join("");
   $("#transactions-empty").hidden = state.transactions.length > 0;
@@ -325,18 +326,14 @@ function updateBulkEditUi() {
     (element) => (element.hidden = !state.bulkEditMode),
   );
   $("#apply-bulk-edit").disabled = !state.selectedTransactionIds.size;
+  $("#delete-bulk-transactions").disabled = !state.selectedTransactionIds.size;
 }
 function setBulkEditMode(enabled) {
   state.bulkEditMode = enabled;
   if (!enabled) {
     state.selectedTransactionIds.clear();
     state.lastSelectedTransactionIndex = null;
-    for (const select of [
-      "#bulk-account",
-      "#bulk-category",
-      "#bulk-type",
-      "#bulk-direction",
-    ])
+    for (const select of ["#bulk-account", "#bulk-category", "#bulk-type"])
       $(select).value = "";
   }
   updateBulkEditUi();
@@ -755,11 +752,12 @@ async function loadNetWorth() {
     api("/api/v1/projection-rules"),
   ]);
   const latest = new Map();
+  state.projectionRules = projectionRules.data;
   balances.data.forEach((row) => latest.set(row.accountId, row));
   $("#balances-body").innerHTML = balances.data
     .map(
       (row) =>
-        `<tr><td>${escapeHtml(row.snapshotDate)}</td><td>${escapeHtml(row.accountName)}</td><td>${escapeHtml(row.accountType)}</td><td class="money">${money.format(dollars(row.balanceMinor))}</td></tr>`,
+        `<tr><td>${escapeHtml(row.snapshotDate)}</td><td>${escapeHtml(row.accountName)}</td><td>${escapeHtml(row.accountType)}</td><td class="money">${money.format(dollars(row.balanceMinor))}</td><td><button class="secondary danger delete-balance" data-id="${escapeHtml(row.id)}">Delete</button></td></tr>`,
     )
     .join("");
   const assets = projection.data.startAssetsMinor,
@@ -782,7 +780,7 @@ async function loadNetWorth() {
             item.frequency === "once"
               ? `once on ${item.startDate}`
               : `${item.frequency} from ${item.startDate}`;
-          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType)} · ${escapeHtml(schedule)} · ${escapeHtml(route)}</span></div><div><strong>${money.format(dollars(item.amountMinor))}</strong><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
+          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType)} · ${escapeHtml(schedule)} · ${escapeHtml(route)}</span></div><div><strong>${money.format(dollars(item.amountMinor))}</strong><button class="secondary edit-projection-rule" data-id="${escapeHtml(item.id)}">Edit</button><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
         })
         .join("")
     : '<div class="empty">No projection rules yet. Add salary, expenses, transfers, debt payments, or a once-only purchase.</div>';
@@ -1186,35 +1184,8 @@ function inferImportType(amount, vendor) {
     return "transfer";
   return amount < 0 ? "expense" : "income";
 }
-function inferImportDirection(amount) {
-  return amount >= 0 ? "credit" : "debit";
-}
-function directionOptions(selected) {
-  return `<option value="debit" ${selected === "debit" ? "selected" : ""}>− Money out</option><option value="credit" ${selected === "credit" ? "selected" : ""}>+ Money in / refund</option>`;
-}
-function updateDirectionLabels() {
-  const form = $("#transaction-form"),
-    type = form.elements.transactionType.value;
-  const labels = {
-    expense: [
-      "− Money out",
-      "Purchase or charge",
-      "+ Money in",
-      "Refund or credit",
-    ],
-    income: ["− Money out", "Income reversal", "+ Money in", "Income received"],
-    transfer: ["− Money out", "Transfer out", "+ Money in", "Transfer in"],
-    adjustment: [
-      "− Money out",
-      "Decrease balance",
-      "+ Money in",
-      "Increase balance",
-    ],
-  }[type];
-  $("#debit-direction-title").textContent = labels[0];
-  $("#debit-direction-help").textContent = labels[1];
-  $("#credit-direction-title").textContent = labels[2];
-  $("#credit-direction-help").textContent = labels[3];
+function transactionDirectionForType(type) {
+  return type === "income" || type === "refund" ? "credit" : "debit";
 }
 function updateProjectionRuleFields() {
   const form = $("#projection-rule-form"),
@@ -1237,15 +1208,23 @@ function updateProjectionRuleFields() {
 function renderImportPreview() {
   const [headers, ...rows] = state.csv.rows;
   const index = importMapping(headers);
+  const outgoingAmounts = new Set(
+    rows
+      .map((row) => importRowAmount(row, index))
+      .filter((amount) => Number.isFinite(amount) && amount < 0)
+      .map((amount) => Math.abs(amount)),
+  );
   $("#import-preview").innerHTML =
-    `<table class="import-table"><thead><tr><th>Include</th><th>Date</th><th>Vendor</th><th>Amount</th><th>Type</th><th>+/−</th><th>Category</th><th>Optional description</th></tr></thead><tbody>${rows
+    `<table class="import-table"><thead><tr><th>Include</th><th>Date</th><th>Vendor</th><th>Amount</th><th>Type</th><th>Category</th><th>Optional description</th></tr></thead><tbody>${rows
       .map((row, i) => {
         const amount = importRowAmount(row, index);
         const vendor = row[index.vendor] ?? "";
-        const type = inferImportType(amount, vendor);
-        const direction = inferImportDirection(amount);
+        let type = inferImportType(amount, vendor);
+        if (type === "income" && outgoingAmounts.has(Math.abs(amount)))
+          type = "refund";
+        const categoryKind = type === "refund" ? "expense" : type;
         const matching = state.categories.filter(
-          (category) => category.active !== 0 && category.kind === type,
+          (category) => category.active !== 0 && category.kind === categoryKind,
         );
         const suggested = state.categorySuggestions[i]?.categoryId;
         const fallback =
@@ -1257,7 +1236,7 @@ function renderImportPreview() {
         const selectedCategory = matching.some((item) => item.id === suggested)
           ? suggested
           : fallback;
-        return `<tr><td><input type="checkbox" data-import-row="${i}" checked /></td><td>${escapeHtml(row[index.date] ?? "")}</td><td>${escapeHtml(vendor)}</td><td>${Number.isFinite(amount) ? money.format(Math.abs(amount)) : "Invalid amount"}</td><td><select data-import-type="${i}">${["expense", "income", "transfer", "adjustment"].map((value) => `<option ${value === type ? "selected" : ""}>${value}</option>`).join("")}</select></td><td><select data-import-direction="${i}">${directionOptions(direction)}</select></td><td><select data-import-category="${i}" required><option value="">Choose category</option>${optionList(matching, selectedCategory)}</select></td><td><input data-import-description="${i}" maxlength="500" placeholder="Optional" /></td></tr>`;
+        return `<tr><td><input type="checkbox" data-import-row="${i}" checked /></td><td>${escapeHtml(row[index.date] ?? "")}</td><td>${escapeHtml(vendor)}</td><td>${Number.isFinite(amount) ? `${amount >= 0 ? "+" : "−"}${money.format(Math.abs(amount))}` : "Invalid amount"}</td><td><select data-import-type="${i}">${["expense", "refund", "income", "transfer", "adjustment"].map((value) => `<option ${value === type ? "selected" : ""}>${value}</option>`).join("")}</select></td><td><select data-import-category="${i}" required><option value="">Choose category</option>${optionList(matching, selectedCategory)}</select></td><td><input data-import-description="${i}" maxlength="500" placeholder="Optional" /></td></tr>`;
       })
       .join("")}</tbody></table>`;
   $("#import-submit").disabled =
@@ -1435,7 +1414,6 @@ document.addEventListener("click", (event) => {
         ["accountId", "#bulk-account"],
         ["categoryId", "#bulk-category"],
         ["transactionType", "#bulk-type"],
-        ["transactionDirection", "#bulk-direction"],
       ])
         if ($(selector).value) changes[key] = $(selector).value;
       if (!Object.keys(changes).length)
@@ -1451,6 +1429,21 @@ document.addEventListener("click", (event) => {
       });
       notify(`${count} transactions updated.`);
       setBulkEditMode(false);
+    });
+    return;
+  }
+  if (target.id === "delete-bulk-transactions") {
+    void run(async () => {
+      const ids = [...state.selectedTransactionIds];
+      if (!confirm(`Permanently delete ${ids.length} selected transactions?`))
+        return;
+      await api("/api/v1/transactions/bulk", {
+        method: "DELETE",
+        body: JSON.stringify({ ids }),
+      });
+      notify(`${ids.length} transactions deleted.`);
+      setBulkEditMode(false);
+      await loadTransactions();
     });
     return;
   }
@@ -1481,7 +1474,7 @@ document.addEventListener("click", (event) => {
       $("#transaction-form").elements.id.value = "";
       $("#transaction-form").transactionDate.value = today();
       $("#transaction-title").textContent = "Add transaction";
-      updateDirectionLabels();
+      refreshTransactionCategoryOptions("expense");
     }
     if (target.dataset.dialog === "account-dialog") {
       $("#account-form").reset();
@@ -1490,7 +1483,9 @@ document.addEventListener("click", (event) => {
     }
     if (target.dataset.dialog === "projection-rule-dialog") {
       $("#projection-rule-form").reset();
+      $("#projection-rule-form").elements.id.value = "";
       $("#projection-rule-form").elements.startDate.value = tomorrow();
+      $("#projection-rule-title").textContent = "Add Projection Rule";
       updateProjectionRuleFields();
     }
     dialog.showModal();
@@ -1504,11 +1499,8 @@ document.addEventListener("click", (event) => {
         form.elements[key].value = key === "amount" ? dollars(value) : value;
     form.elements.id.value = item.id;
     form.amount.value = dollars(item.amountMinor);
-    form.categoryId.value = item.categoryId;
+    refreshTransactionCategoryOptions(item.transactionType, item.categoryId);
     form.accountId.value = item.accountId;
-    form.elements.transactionDirection.value =
-      item.transactionDirection ?? "debit";
-    updateDirectionLabels();
     $("#transaction-title").textContent = "Edit transaction";
     $("#transaction-dialog").showModal();
   }
@@ -1529,6 +1521,27 @@ document.addEventListener("click", (event) => {
     $("#account-title").textContent = "Edit account";
     $("#account-dialog").showModal();
   }
+  if (target.classList.contains("edit-projection-rule")) {
+    const rule = state.projectionRules?.find(
+      (row) => row.id === target.dataset.id,
+    );
+    if (rule) {
+      const form = $("#projection-rule-form");
+      form.elements.id.value = rule.id;
+      form.elements.description.value = rule.description;
+      form.elements.ruleType.value = rule.ruleType;
+      form.elements.amount.value = dollars(rule.amountMinor);
+      form.elements.frequency.value = rule.frequency;
+      form.elements.startDate.value = rule.startDate;
+      form.elements.endDate.value = rule.endDate ?? "";
+      updateProjectionRuleFields();
+      form.elements.fromAccountId.value = rule.fromAccountId ?? "";
+      form.elements.toAccountId.value = rule.toAccountId ?? "";
+      $("#projection-rule-title").textContent = "Edit Projection Rule";
+      $("#projection-rule-dialog").showModal();
+    }
+    return;
+  }
   if (
     target.classList.contains("delete-transaction") &&
     confirm("Delete this transaction? This cannot be undone.")
@@ -1539,6 +1552,17 @@ document.addEventListener("click", (event) => {
       });
       notify("Transaction deleted.");
       await loadTransactions();
+    });
+  if (
+    target.classList.contains("delete-balance") &&
+    confirm("Delete this account balance entry?")
+  )
+    void run(async () => {
+      await api(`/api/v1/balance-snapshots/${target.dataset.id}`, {
+        method: "DELETE",
+      });
+      notify("Account balance deleted.");
+      await loadNetWorth();
     });
   if (
     target.classList.contains("archive") &&
@@ -1614,15 +1638,12 @@ document.addEventListener("change", (event) => {
     });
     return;
   }
-  if (event.target.matches("#transaction-form [name='transactionType']")) {
-    const form = $("#transaction-form");
-    form.elements.transactionDirection.value =
-      event.target.value === "income" ? "credit" : "debit";
-    updateDirectionLabels();
-    return;
-  }
   if (event.target.matches("#projection-rule-form [name='ruleType']")) {
     updateProjectionRuleFields();
+    return;
+  }
+  if (event.target.matches("#transaction-form [name='transactionType']")) {
+    refreshTransactionCategoryOptions(event.target.value);
     return;
   }
   const typeSelect = event.target.closest("[data-import-type]");
@@ -1631,7 +1652,10 @@ document.addEventListener("change", (event) => {
     `[data-import-category="${typeSelect.dataset.importType}"]`,
   );
   const matching = state.categories.filter(
-    (category) => category.active !== 0 && category.kind === typeSelect.value,
+    (category) =>
+      category.active !== 0 &&
+      category.kind ===
+        (typeSelect.value === "refund" ? "expense" : typeSelect.value),
   );
   const fallback =
     matching.find((item) => item.name.toLowerCase().startsWith("uncategorized"))
@@ -1681,7 +1705,9 @@ $("#transaction-form").addEventListener("submit", (event) => {
       body = {
         transactionDate: form.get("transactionDate"),
         transactionType: form.get("transactionType"),
-        transactionDirection: form.get("transactionDirection"),
+        transactionDirection: transactionDirectionForType(
+          form.get("transactionType"),
+        ),
         categoryId: form.get("categoryId"),
         accountId: form.get("accountId"),
         vendorName: form.get("vendorName"),
@@ -1722,22 +1748,26 @@ $("#projection-rule-form").addEventListener("submit", (event) => {
   const formElement = event.currentTarget;
   void run(async () => {
     const form = new FormData(formElement);
-    await api("/api/v1/projection-rules", {
-      method: "POST",
-      body: JSON.stringify({
-        description: form.get("description"),
-        ruleType: form.get("ruleType"),
-        amountMinor: cents(form.get("amount")),
-        frequency: form.get("frequency"),
-        startDate: form.get("startDate"),
-        endDate: form.get("endDate") || null,
-        fromAccountId: form.get("fromAccountId") || null,
-        toAccountId: form.get("toAccountId") || null,
-      }),
-    });
+    const id = form.get("id");
+    await api(
+      id ? `/api/v1/projection-rules/${id}` : "/api/v1/projection-rules",
+      {
+        method: id ? "PUT" : "POST",
+        body: JSON.stringify({
+          description: form.get("description"),
+          ruleType: form.get("ruleType"),
+          amountMinor: cents(form.get("amount")),
+          frequency: form.get("frequency"),
+          startDate: form.get("startDate"),
+          endDate: form.get("endDate") || null,
+          fromAccountId: form.get("fromAccountId") || null,
+          toAccountId: form.get("toAccountId") || null,
+        }),
+      },
+    );
     $("#projection-rule-dialog").close();
     formElement.reset();
-    notify("Projection rule added.");
+    notify(id ? "Projection rule updated." : "Projection rule added.");
     await loadNetWorth();
   });
 });
@@ -1897,7 +1927,8 @@ $("#import-form").addEventListener("submit", (event) => {
       .map((row, filteredIndex) => {
         const originalIndex = [...selected][filteredIndex],
           rawAmount = importRowAmount(row, importIndex),
-          direction = $(`[data-import-direction="${originalIndex}"]`).value;
+          transactionType = $(`[data-import-type="${originalIndex}"]`).value,
+          direction = transactionDirectionForType(transactionType);
         return {
           transactionDate: row[key("date")],
           vendorName: row[key("vendor")],
@@ -1909,19 +1940,19 @@ $("#import-form").addEventListener("submit", (event) => {
             Math.abs(rawAmount) * (direction === "credit" ? 1 : -1),
           ),
           categoryId: $(`[data-import-category="${originalIndex}"]`).value,
-          transactionType: $(`[data-import-type="${originalIndex}"]`).value,
+          transactionType,
           transactionDirection: direction,
           currency: "CAD",
         };
       });
     const totals = { accepted: 0, duplicates: 0, rejected: 0, errors: [] };
-    for (let index = 0; index < rows.length; index += 500) {
+    for (let index = 0; index < rows.length; index += 40) {
       const result = await api("/api/v1/imports", {
         method: "POST",
         body: JSON.stringify({
           fileName: state.csv.fileName,
           accountId: form.get("accountId"),
-          rows: rows.slice(index, index + 500),
+          rows: rows.slice(index, index + 40),
         }),
       });
       totals.accepted += result.data.accepted;

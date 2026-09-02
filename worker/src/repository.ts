@@ -9,7 +9,7 @@ import type { TransactionInput } from "./types";
 // Stored amounts stay positive. These static SQL expressions apply the
 // direction when calculating spending and income; no user input enters them.
 const EXPENSE_EFFECT_SQL =
-  "CASE WHEN t.transaction_direction='credit' THEN -t.amount_minor ELSE t.amount_minor END";
+  "CASE WHEN t.transaction_type='refund' OR t.transaction_direction='credit' THEN -t.amount_minor ELSE t.amount_minor END";
 const INCOME_EFFECT_SQL =
   "CASE WHEN t.transaction_direction='debit' THEN -t.amount_minor ELSE t.amount_minor END";
 
@@ -67,6 +67,7 @@ export class BudgetRepository {
   // A signed effect lets historical net worth move forward/back from snapshots.
   private balanceEffect(input: TransactionInput): number | null {
     if (input.balanceEffectMinor !== undefined) return input.balanceEffectMinor;
+    if (input.transactionType === "refund") return input.amountMinor;
     return input.transactionDirection === "credit"
       ? input.amountMinor
       : -input.amountMinor;
@@ -498,6 +499,44 @@ export class BudgetRepository {
       .first();
   }
 
+  async updateProjectionRule(
+    id: string,
+    input: {
+      description: string;
+      ruleType: "income" | "expense" | "transfer";
+      amountMinor: number;
+      frequency: "monthly" | "yearly" | "once";
+      startDate: string;
+      endDate: string | null;
+      fromAccountId: string | null;
+      toAccountId: string | null;
+    },
+  ) {
+    const result = await this.db
+      .prepare(
+        "UPDATE projection_rules SET description=?,rule_type=?,amount_minor=?,frequency=?,start_date=?,end_date=?,from_account_id=?,to_account_id=?,updated_at=? WHERE id=? AND user_id=? AND active=1",
+      )
+      .bind(
+        input.description,
+        input.ruleType,
+        input.amountMinor,
+        input.frequency,
+        input.startDate,
+        input.endDate,
+        input.fromAccountId,
+        input.toAccountId,
+        new Date().toISOString(),
+        id,
+        this.userId,
+      )
+      .run();
+    if (!result.meta.changes) return null;
+    return this.db
+      .prepare("SELECT * FROM projection_rules WHERE id=? AND user_id=?")
+      .bind(id, this.userId)
+      .first();
+  }
+
   async deleteProjectionRule(id: string) {
     const result = await this.db
       .prepare(
@@ -737,14 +776,22 @@ export class BudgetRepository {
     >,
   ) {
     if (!ids.length) return 0;
-    const placeholders = ids.map(() => "?").join(",");
-    const owned = await this.db
-      .prepare(
-        `SELECT COUNT(*) count FROM transactions WHERE user_id=? AND id IN (${placeholders})`,
-      )
-      .bind(this.userId, ...ids)
-      .first<{ count: number }>();
-    if (owned?.count !== ids.length) return -1;
+    const chunks = <T>(items: T[], size = 80) =>
+      Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
+        items.slice(index * size, (index + 1) * size),
+      );
+    let ownedCount = 0;
+    for (const chunk of chunks(ids)) {
+      const placeholders = chunk.map(() => "?").join(",");
+      const owned = await this.db
+        .prepare(
+          `SELECT COUNT(*) count FROM transactions WHERE user_id=? AND id IN (${placeholders})`,
+        )
+        .bind(this.userId, ...chunk)
+        .first<{ count: number }>();
+      ownedCount += Number(owned?.count ?? 0);
+    }
+    if (ownedCount !== ids.length) return -1;
     const fields: string[] = [],
       values: unknown[] = [];
     const add = (column: string, value: unknown) => {
@@ -755,21 +802,63 @@ export class BudgetRepository {
     if (changes.categoryId) add("category_id", changes.categoryId);
     if (changes.transactionType)
       add("transaction_type", changes.transactionType);
-    if (changes.transactionDirection)
-      add("transaction_direction", changes.transactionDirection);
+    const derivedDirection = changes.transactionType
+      ? changes.transactionType === "income" ||
+        changes.transactionType === "refund"
+        ? "credit"
+        : changes.transactionType === "expense"
+          ? "debit"
+          : changes.transactionDirection
+      : changes.transactionDirection;
+    if (derivedDirection) add("transaction_direction", derivedDirection);
     fields.push(
       "balance_effect_minor=CASE WHEN COALESCE(?,transaction_direction)='credit' THEN amount_minor ELSE -amount_minor END",
       "updated_at=?",
     );
-    values.push(changes.transactionDirection ?? null, new Date().toISOString());
+    values.push(derivedDirection ?? null, new Date().toISOString());
     const results = await this.db.batch(
-      ids.map((id) =>
-        this.db
+      chunks(ids).map((chunk) => {
+        const placeholders = chunk.map(() => "?").join(",");
+        return this.db
           .prepare(
-            `UPDATE transactions SET ${fields.join(",")} WHERE id=? AND user_id=?`,
+            `UPDATE transactions SET ${fields.join(",")} WHERE user_id=? AND id IN (${placeholders})`,
           )
-          .bind(...values, id, this.userId),
-      ),
+          .bind(...values, this.userId, ...chunk);
+      }),
+    );
+    return results.reduce(
+      (total, result) => total + Number(result.meta.changes ?? 0),
+      0,
+    );
+  }
+
+  async bulkDeleteTransactions(ids: string[]) {
+    if (!ids.length) return 0;
+    const chunks = Array.from(
+      { length: Math.ceil(ids.length / 80) },
+      (_, index) => ids.slice(index * 80, (index + 1) * 80),
+    );
+    let ownedCount = 0;
+    for (const chunk of chunks) {
+      const placeholders = chunk.map(() => "?").join(",");
+      const owned = await this.db
+        .prepare(
+          `SELECT COUNT(*) count FROM transactions WHERE user_id=? AND id IN (${placeholders})`,
+        )
+        .bind(this.userId, ...chunk)
+        .first<{ count: number }>();
+      ownedCount += Number(owned?.count ?? 0);
+    }
+    if (ownedCount !== ids.length) return -1;
+    const results = await this.db.batch(
+      chunks.map((chunk) => {
+        const placeholders = chunk.map(() => "?").join(",");
+        return this.db
+          .prepare(
+            `DELETE FROM transactions WHERE user_id=? AND id IN (${placeholders})`,
+          )
+          .bind(this.userId, ...chunk);
+      }),
     );
     return results.reduce(
       (total, result) => total + Number(result.meta.changes ?? 0),
@@ -784,24 +873,28 @@ export class BudgetRepository {
     monthCount: number,
   ) {
     const effect = type === "expense" ? EXPENSE_EFFECT_SQL : INCOME_EFFECT_SQL;
+    const transactionTypeSql =
+      type === "expense"
+        ? "t.transaction_type IN ('expense','refund')"
+        : "t.transaction_type='income'";
     const [categories, accounts, masterCategories, budget] = await Promise.all([
       this.db
         .prepare(
-          `SELECT c.id,c.name,c.master_category_id,c.monthly_budget_minor,COALESCE(SUM(${effect}),0) amount_minor,COUNT(t.id) transaction_count,COALESCE(SUM(CASE WHEN t.transaction_direction=${type === "expense" ? "'credit'" : "'debit'"} THEN t.amount_minor ELSE 0 END),0) reversal_minor FROM categories c LEFT JOIN transactions t ON t.category_id=c.id AND t.user_id=c.user_id AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type=? WHERE c.user_id=? AND c.active=1 AND c.kind=? GROUP BY c.id,c.name,c.master_category_id,c.monthly_budget_minor ORDER BY amount_minor DESC,c.name`,
+          `SELECT c.id,c.name,c.master_category_id,c.monthly_budget_minor,COALESCE(SUM(${effect}),0) amount_minor,COUNT(t.id) transaction_count,COALESCE(SUM(CASE WHEN t.transaction_type='refund' OR t.transaction_direction=${type === "expense" ? "'credit'" : "'debit'"} THEN t.amount_minor ELSE 0 END),0) reversal_minor FROM categories c LEFT JOIN transactions t ON t.category_id=c.id AND t.user_id=c.user_id AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} WHERE c.user_id=? AND c.active=1 AND c.kind=? GROUP BY c.id,c.name,c.master_category_id,c.monthly_budget_minor ORDER BY amount_minor DESC,c.name`,
         )
-        .bind(startDate, endDate, type, this.userId, type)
+        .bind(startDate, endDate, this.userId, type)
         .all(),
       this.db
         .prepare(
-          `SELECT a.id,a.name,COALESCE(c.master_category_id,'unassigned') master_category_id,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type=? GROUP BY a.id,a.name,c.master_category_id ORDER BY amount_minor DESC`,
+          `SELECT a.id,a.name,COALESCE(c.master_category_id,'unassigned') master_category_id,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} GROUP BY a.id,a.name,c.master_category_id ORDER BY amount_minor DESC`,
         )
-        .bind(this.userId, startDate, endDate, type)
+        .bind(this.userId, startDate, endDate)
         .all(),
       this.db
         .prepare(
-          `SELECT COALESCE(mc.id,'unassigned') id,COALESCE(mc.name,'Unassigned') name,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND t.transaction_type=? GROUP BY mc.id,mc.name ORDER BY amount_minor DESC`,
+          `SELECT COALESCE(mc.id,'unassigned') id,COALESCE(mc.name,'Unassigned') name,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} GROUP BY mc.id,mc.name ORDER BY amount_minor DESC`,
         )
-        .bind(this.userId, startDate, endDate, type)
+        .bind(this.userId, startDate, endDate)
         .all(),
       this.db
         .prepare(
@@ -821,7 +914,7 @@ export class BudgetRepository {
   async rangeSummary(startDate: string, endDate: string) {
     const totals = await this.db
       .prepare(
-        `SELECT SUM(CASE WHEN t.transaction_type='income' THEN ${INCOME_EFFECT_SQL} ELSE 0 END) income_minor,SUM(CASE WHEN t.transaction_type='expense' THEN ${EXPENSE_EFFECT_SQL} ELSE 0 END) expense_minor,SUM(CASE WHEN t.transaction_type NOT IN ('transfer') THEN 1 ELSE 0 END) transaction_count FROM transactions t WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ?`,
+        `SELECT SUM(CASE WHEN t.transaction_type='income' THEN ${INCOME_EFFECT_SQL} ELSE 0 END) income_minor,SUM(CASE WHEN t.transaction_type IN ('expense','refund') THEN ${EXPENSE_EFFECT_SQL} ELSE 0 END) expense_minor,SUM(CASE WHEN t.transaction_type NOT IN ('transfer') THEN 1 ELSE 0 END) transaction_count FROM transactions t WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ?`,
       )
       .bind(this.userId, startDate, endDate)
       .first<Record<string, number>>();
@@ -885,9 +978,11 @@ export class BudgetRepository {
     const clauses = [
       "t.user_id=?",
       "t.transaction_date BETWEEN ? AND ?",
-      "t.transaction_type=?",
+      type === "expense"
+        ? "t.transaction_type IN ('expense','refund')"
+        : "t.transaction_type='income'",
     ];
-    const bindings: unknown[] = [this.userId, startDate, endDate, type];
+    const bindings: unknown[] = [this.userId, startDate, endDate];
     if (categoryId) {
       clauses.push("c.id=?");
       bindings.push(categoryId);

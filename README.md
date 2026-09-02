@@ -1,6 +1,21 @@
-# R&R Budget v7.7
+# R&R Budget v7.8
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.8 changes
+
+- Renames Balance History to Account Balance, adds deletion, and treats every
+  future-dated balance as an authoritative projection anchor. Account variables
+  continue from each newly supplied balance.
+- Adds editing for Projection Rules.
+- Makes 500-row bulk transaction updates and deletions safe for D1 by using
+  bounded SQL chunks, and adds Delete to the bulk toolbar.
+- Adds a first-class Refund transaction type. Refunds display as positive
+  amounts but reduce expense and budget totals. CSV imports automatically match
+  equal incoming and outgoing amounts, reuse the original expense category when
+  available, and submit in D1-safe 40-row chunks.
+- Removes user-facing money-direction controls. The application derives the
+  stored balance direction from the selected transaction type and CSV sign.
 
 ## V7.7 changes
 
@@ -95,7 +110,7 @@ A private, multi-user budget and net-worth application inspired by `R&R Expenses
 - `database/`: forward-only Cloudflare D1 migrations and invented development seeds
 - `.github/workflows/`: pull-request checks and main-branch production deployment
 
-The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.7 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
+The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.8 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
 
 For a detailed, file-by-file explanation, read [`CODE_WALKTHROUGH.md`](CODE_WALKTHROUGH.md).
 
@@ -212,7 +227,7 @@ All routes except health, registration, login, and logout require a valid sessio
 
 ## CSV import
 
-The frontend accepts general CSV files, the tested Neo Mastercard export format (`Transaction Date`, `Posted Date`, `Status`, `Description`, `Amount`), and headerless CIBC exports (`date, description, debit, credit`). It safely parses quoted fields, maps amount or separate debit/credit columns, and previews every row. Files over 500 rows are transparently sent in safe 500-row API batches. Every included row has an editable type, debit/credit direction, required category, and optional description. Categories are suggested in priority order from user rules, normalized exact merchant history, similar merchant history, and expanded merchant-keyword groups. Normalization removes common payment noise and long reference numbers, and similar merchants use token overlap with a confidence threshold. Unmatched rows use the appropriate Uncategorized category. Dates must be ISO `YYYY-MM-DD`; only CAD is accepted.
+The frontend accepts general CSV files, the tested Neo Mastercard export format (`Transaction Date`, `Posted Date`, `Status`, `Description`, `Amount`), and headerless CIBC exports (`date, description, debit, credit`). It safely parses quoted fields, maps amount or separate debit/credit columns, and previews every row. Large files are transparently sent in safe 40-row API batches. Every included row has an editable type, required category, and optional description. Equal incoming and outgoing amounts are classified as refunds unless their descriptions identify transfers; historical same-account expenses are also checked during import. Categories are suggested in priority order from user rules, normalized exact merchant history, similar merchant history, and expanded merchant-keyword groups. Normalization removes common payment noise and long reference numbers, and similar merchants use token overlap with a confidence threshold. Unmatched rows use the appropriate Uncategorized category. Dates must be ISO `YYYY-MM-DD`; only CAD is accepted.
 
 The included `test/fixtures/mastercard-sample.csv` is invented. Never commit real exports. Direct bank connectivity is intentionally excluded until a vetted provider and consent model are approved.
 
