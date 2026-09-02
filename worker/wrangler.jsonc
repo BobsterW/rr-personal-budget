@@ -3,7 +3,8 @@
   // Public Worker name and TypeScript entry point used by Wrangler.
   "name": "rr-personal-budget-api",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-21",
+  // Latest compatibility date supported by the pinned Wrangler/workerd build.
+  "compatibility_date": "2026-08-22",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "vars": {
@@ -15,8 +16,7 @@
   },
   "d1_databases": [
     {
-      // Code receives this binding as env.DB. Replace the placeholder only
-      // after creating the real D1 database in the Cloudflare account.
+      // Code receives the existing production D1 database as env.DB.
       "binding": "DB",
       "database_name": "rr-budget",
       "database_id": "5afe0239-dbc5-4ac2-8487-9e170d503921",

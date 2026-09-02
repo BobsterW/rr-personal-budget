@@ -103,7 +103,7 @@
         <a href="#transactions"
           ><i aria-hidden="true">↕</i><span>Transactions</span></a
         ><a href="#spending"
-          ><i aria-hidden="true">◔</i><span>Monthly spending</span></a
+          ><i aria-hidden="true">◔</i><span>Monthly activity</span></a
         ><a href="#budget"><i aria-hidden="true">◎</i><span>Budget</span></a
         ><a href="#net-worth"
           ><i aria-hidden="true">⌁</i><span>Net worth</span></a
@@ -154,7 +154,9 @@
           <div class="hero-actions">
             <button data-dialog="transaction-dialog">Add transaction</button
             ><button class="secondary" data-dialog="import-dialog">
-              Import CSV
+              Import CSV</button
+            ><button class="secondary" id="bulk-edit-toggle">
+              Edit multiple
             </button>
           </div>
         </div>
@@ -188,10 +190,46 @@
             </select></label
           ><button class="secondary" id="apply-filters">Apply filters</button>
         </div>
+        <div id="bulk-edit-toolbar" class="panel bulk-edit-toolbar" hidden>
+          <strong><span id="bulk-selected-count">0</span> selected</strong>
+          <button class="secondary compact" id="select-page-transactions">
+            Select this page
+          </button>
+          <button class="secondary compact" id="select-filtered-transactions">
+            Select all filtered
+          </button>
+          <label
+            >Account<select id="bulk-account">
+              <option value="">No change</option>
+            </select></label
+          ><label
+            >Category<select id="bulk-category">
+              <option value="">No change</option>
+            </select></label
+          ><label
+            >Type<select id="bulk-type">
+              <option value="">No change</option>
+              <option>expense</option>
+              <option>income</option>
+              <option>transfer</option>
+              <option>adjustment</option>
+            </select></label
+          ><label
+            >Direction<select id="bulk-direction">
+              <option value="">No change</option>
+              <option value="debit">Money out</option>
+              <option value="credit">Money in / refund</option>
+            </select></label
+          ><button id="apply-bulk-edit">Apply changes</button>
+          <button class="secondary" id="cancel-bulk-edit">Cancel</button>
+        </div>
         <div class="panel table-wrap">
           <table class="transactions-table">
             <thead>
               <tr>
+                <th class="bulk-select-column" hidden>
+                  <span class="sr-only">Select</span>
+                </th>
                 <th>Date</th>
                 <th>Vendor</th>
                 <th>Category</th>
@@ -217,8 +255,8 @@
         <div class="hero">
           <div>
             <p class="eyebrow">Monthly pulse</p>
-            <h1>Monthly spending</h1>
-            <p>Actual activity from your transaction ledger.</p>
+            <h1>Monthly activity</h1>
+            <p>Explore expenses and income from the same transaction ledger.</p>
           </div>
           <div class="hero-actions">
             <label
@@ -249,12 +287,32 @@
           </article>
         </div>
         <p id="month-comparison" class="fine-print"></p>
+        <div
+          class="activity-mode-toggle"
+          role="group"
+          aria-label="Monthly activity view"
+        >
+          <button
+            class="activity-mode"
+            data-activity-mode="expense"
+            aria-pressed="true"
+          >
+            Expenses
+          </button>
+          <button
+            class="activity-mode secondary"
+            data-activity-mode="income"
+            aria-pressed="false"
+          >
+            Income
+          </button>
+        </div>
         <div class="spending-breakdown">
           <section class="panel donut-panel">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">Spending mix</p>
-                <h2>Master categories</h2>
+                <p class="eyebrow" id="activity-mix-eyebrow">Spending mix</p>
+                <h2 id="activity-master-title">Expense master categories</h2>
               </div>
               <button id="clear-master-filter" class="secondary compact" hidden>
                 Show all
@@ -274,31 +332,22 @@
           </section>
         </div>
         <section class="panel">
-          <h2>By account</h2>
+          <h2 id="activity-account-title">Expenses by account</h2>
           <div id="account-bars" class="bars"></div>
         </section>
         <section class="panel">
-          <h2>Category budget tracking</h2>
+          <h2 id="activity-budget-title">Category budget tracking</h2>
           <div id="category-budget-status" class="budget-status"></div>
         </section>
-        <div class="networth-stack monthly-trend-stack">
+        <div class="monthly-trend-stack">
           <section class="panel">
-            <h2>Expense trend</h2>
+            <h2 id="activity-trend-title">Expense trend</h2>
             <label
               >Category or master category<select
                 id="expense-trend-filter"
               ></select
             ></label>
             <div id="expense-trend-chart" class="trend-chart"></div>
-          </section>
-          <section class="panel">
-            <h2>Income trend</h2>
-            <label
-              >Category or master category<select
-                id="income-trend-filter"
-              ></select
-            ></label>
-            <div id="income-trend-chart" class="trend-chart"></div>
           </section>
         </div>
       </section>
@@ -438,32 +487,23 @@
           </p>
         </section>
         <section class="panel projection-assumptions-panel">
-          <h2>Projection assumptions</h2>
-          <form id="projection-form" class="projection-assumptions-form">
-            <label
-              >Monthly income<input
-                name="monthlyIncome"
-                type="number"
-                step="0.01"
-                required /></label
-            ><label
-              >Monthly expenses<input
-                name="monthlyExpense"
-                type="number"
-                step="0.01"
-                required /></label
-            ><label
-              >Additional monthly savings<input
-                name="monthlySavings"
-                type="number"
-                step="0.01"
-                required /></label
-            ><button type="submit">Save assumptions</button>
-          </form>
+          <div class="panel-heading">
+            <div>
+              <h2>Account-aware projection rules</h2>
+              <p>
+                Route future income, expenses, transfers, and debt payments
+                through real accounts.
+              </p>
+            </div>
+            <button data-dialog="projection-rule-dialog">
+              Add projection rule
+            </button>
+          </div>
+          <div id="projection-rules-list" class="projection-rules-list"></div>
           <p class="fine-print">
-            The selected graph end date controls the projection length. Income,
-            expenses, savings, account payments, equity, and dividends affect
-            future balances. This is a planning estimate, not financial advice.
+            The selected graph end date controls the projection length.
+            Transfers change account composition without changing total net
+            worth. This is a planning estimate, not financial advice.
           </p>
         </section>
         <section class="panel">
@@ -518,7 +558,7 @@
             <div class="settings-content">
               <p class="fine-print">
                 Group detailed categories into the smaller set shown in Monthly
-                spending.
+                Activity.
               </p>
               <form id="master-category-form" class="inline-form">
                 <input
@@ -720,6 +760,67 @@
         </div>
       </form>
     </dialog>
+    <dialog id="projection-rule-dialog">
+      <form id="projection-rule-form">
+        <div class="dialog-heading">
+          <h2>Add account-aware projection rule</h2>
+          <button
+            type="button"
+            class="icon secondary"
+            data-close
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="form-grid">
+          <label class="wide"
+            >Description<input
+              name="description"
+              maxlength="120"
+              placeholder="Salary, rent, mortgage payment…"
+              required
+          /></label>
+          <label
+            >Type<select name="ruleType" required>
+              <option value="income">Income into an account</option>
+              <option value="expense">Expense from an account</option>
+              <option value="transfer">Transfer / debt payment</option>
+            </select></label
+          >
+          <label
+            >Amount (CAD)<input
+              name="amount"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+          /></label>
+          <label
+            >Frequency<select name="frequency" required>
+              <option>monthly</option>
+              <option>yearly</option>
+              <option>once</option>
+            </select></label
+          >
+          <label
+            >Start date<input name="startDate" type="date" required
+          /></label>
+          <label>End date (optional)<input name="endDate" type="date" /></label>
+          <label id="projection-from-field"
+            >From account<select name="fromAccountId"></select
+          ></label>
+          <label id="projection-to-field"
+            >To account<select name="toAccountId"></select
+          ></label>
+        </div>
+        <p id="projection-rule-help" class="fine-print"></p>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" data-close>Cancel</button
+          ><button>Save projection rule</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="account-dialog">
       <form id="account-form">
         <div class="dialog-heading">
@@ -845,7 +946,7 @@
         </div>
       </form>
     </dialog>
-    <script src="config.js?v=7.5.0"></script>
-    <script type="module" src="app.js?v=7.5.0"></script>
+    <script src="config.js?v=7.6.0"></script>
+    <script type="module" src="app.js?v=7.6.0"></script>
   </body>
 </html>

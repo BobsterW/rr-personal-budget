@@ -69,4 +69,59 @@ describe("net-worth timeline", () => {
       ]),
     );
   });
+
+  it("routes projected cash through real accounts without inventing a cash-flow account", () => {
+    const twoAccounts: TimelineAccount[] = [
+      accounts[0]!,
+      { ...accounts[0]!, id: "savings", name: "Savings" },
+    ];
+    const points = buildNetWorthTimeline(
+      twoAccounts,
+      [
+        { accountId: "cash", date: "2026-08-20", balanceMinor: 100_000 },
+        { accountId: "savings", date: "2026-08-20", balanceMinor: 50_000 },
+      ],
+      [],
+      [],
+      assumptions,
+      "2026-08-20",
+      "2026-10-01",
+      "2026-08-20",
+      [
+        {
+          id: "salary",
+          description: "Salary",
+          ruleType: "income",
+          amountMinor: 20_000,
+          frequency: "once",
+          startDate: "2026-09-01",
+          endDate: null,
+          fromAccountId: null,
+          toAccountId: "cash",
+        },
+        {
+          id: "save",
+          description: "Move to savings",
+          ruleType: "transfer",
+          amountMinor: 10_000,
+          frequency: "once",
+          startDate: "2026-09-15",
+          endDate: null,
+          fromAccountId: "cash",
+          toAccountId: "savings",
+        },
+      ],
+    );
+    const last = points.at(-1)!;
+    expect(last.accounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "cash", balanceMinor: 110_000 }),
+        expect.objectContaining({ id: "savings", balanceMinor: 60_000 }),
+      ]),
+    );
+    expect(
+      last.accounts.some((account) => account.id === "projected-cash-flow"),
+    ).toBe(false);
+    expect(last.netWorthMinor).toBe(170_000);
+  });
 });

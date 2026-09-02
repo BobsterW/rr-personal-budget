@@ -5,6 +5,7 @@ import type {
   LiquidityClass,
   PaymentFrequency,
   ProjectionAssumptions,
+  ProjectionRule,
 } from "./types";
 
 export interface TimelineAccount {
@@ -112,13 +113,9 @@ export function balanceAt(
     .reduce((sum, item) => sum + item.effectMinor, 0);
 }
 
-function aggregate(
-  accounts: TimelineAccount[],
-  balances: Map<string, number>,
-  extraLiquid = 0,
-) {
+function aggregate(accounts: TimelineAccount[], balances: Map<string, number>) {
   let fixed = 0,
-    liquid = extraLiquid;
+    liquid = 0;
   for (const account of accounts) {
     const value = balances.get(account.id) ?? 0;
     if (account.liquidityClass === "fixed") fixed += value;
@@ -128,27 +125,52 @@ function aggregate(
     fixedNetWorthMinor: Math.round(fixed),
     liquidNetWorthMinor: Math.round(liquid),
     netWorthMinor: Math.round(fixed + liquid),
-    accounts: [
-      ...accounts.map((account) => ({
-        id: account.id,
-        name: account.name,
-        accountType: account.accountType,
-        liquidityClass: account.liquidityClass,
-        balanceMinor: Math.round(balances.get(account.id) ?? 0),
-      })),
-      ...(extraLiquid
-        ? [
-            {
-              id: "projected-cash-flow",
-              name: "Projected cash flow",
-              accountType: "cash" as const,
-              liquidityClass: "liquid" as const,
-              balanceMinor: Math.round(extraLiquid),
-            },
-          ]
-        : []),
-    ],
+    accounts: accounts.map((account) => ({
+      id: account.id,
+      name: account.name,
+      accountType: account.accountType,
+      liquidityClass: account.liquidityClass,
+      balanceMinor: Math.round(balances.get(account.id) ?? 0),
+    })),
   };
+}
+
+function ruleActiveDuring(rule: ProjectionRule, from: string, to: string) {
+  return rule.startDate <= to && (!rule.endDate || rule.endDate > from);
+}
+
+function ruleAmount(rule: ProjectionRule, from: string, to: string) {
+  if (!ruleActiveDuring(rule, from, to)) return 0;
+  if (rule.frequency === "once")
+    return rule.startDate > from && rule.startDate <= to ? rule.amountMinor : 0;
+  const activeFrom = rule.startDate > from ? rule.startDate : from;
+  const activeTo = rule.endDate && rule.endDate < to ? rule.endDate : to;
+  const months = daysBetween(activeFrom, activeTo) / 30.4375;
+  return (
+    rule.amountMinor * (rule.frequency === "monthly" ? months : months / 12)
+  );
+}
+
+function applyProjectionRules(
+  balances: Map<string, number>,
+  rules: ProjectionRule[],
+  from: string,
+  to: string,
+) {
+  for (const rule of rules) {
+    const amount = ruleAmount(rule, from, to);
+    if (!amount) continue;
+    if (rule.fromAccountId)
+      balances.set(
+        rule.fromAccountId,
+        (balances.get(rule.fromAccountId) ?? 0) - amount,
+      );
+    if (rule.toAccountId)
+      balances.set(
+        rule.toAccountId,
+        (balances.get(rule.toAccountId) ?? 0) + amount,
+      );
+  }
 }
 
 // Emit actual points through today, then compound accounts and apply planned
@@ -158,10 +180,11 @@ export function buildNetWorthTimeline(
   snapshots: TimelineSnapshot[],
   effects: TimelineEffect[],
   purchases: TimelinePurchase[],
-  assumptions: ProjectionAssumptions,
+  _assumptions: ProjectionAssumptions,
   startDate: string,
   endDate: string,
   today: string,
+  projectionRules: ProjectionRule[] = [],
 ): TimelinePoint[] {
   const dates = timelineDates(startDate, endDate, today);
   const balances = new Map(
@@ -185,12 +208,7 @@ export function buildNetWorthTimeline(
         ...aggregate(accounts, historical),
       };
     });
-  let previous = today,
-    extraLiquid = 0;
-  const monthlyContribution =
-    assumptions.monthlyIncomeMinor -
-    assumptions.monthlyExpenseMinor +
-    assumptions.monthlySavingsMinor;
+  let previous = today;
   for (const date of dates.filter((item) => item > today)) {
     const months = daysBetween(previous, date) / 30.4375;
     for (const account of accounts) {
@@ -204,17 +222,12 @@ export function buildNetWorthTimeline(
       // liabilities may still accrue their configured interest.
       const annualRate = liability ? account.annualInterestBps : 0;
       value *= Math.pow(1 + annualRate / 10_000, months / 12);
-      const regularPayments =
-        account.paymentFrequency === "monthly"
-          ? account.paymentAmountMinor * months
-          : account.paymentFrequency === "yearly"
-            ? account.paymentAmountMinor * (months / 12)
-            : 0;
+      // Cash-funded payments must be represented by a projection transfer so
+      // both the paying account and receiving asset/liability change together.
       value += liability
-        ? regularPayments
-        : regularPayments +
-          (account.annualEquityGainMinor + account.annualDividendMinor) *
-            (months / 12);
+        ? 0
+        : (account.annualEquityGainMinor + account.annualDividendMinor) *
+          (months / 12);
       balances.set(account.id, value);
     }
     for (const purchase of purchases.filter(
@@ -224,11 +237,13 @@ export function buildNetWorthTimeline(
         purchase.accountId,
         (balances.get(purchase.accountId) ?? 0) - purchase.amountMinor,
       );
-    extraLiquid += monthlyContribution * months;
+    // Recurring income, expenses, transfers, and debt payments now affect the
+    // selected real accounts instead of an invented projected-cash-flow layer.
+    applyProjectionRules(balances, projectionRules, previous, date);
     result.push({
       date,
       phase: "projected",
-      ...aggregate(accounts, balances, extraLiquid),
+      ...aggregate(accounts, balances),
     });
     previous = date;
   }
