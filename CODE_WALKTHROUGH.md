@@ -1,4 +1,4 @@
-# V7.6 code walkthrough
+# V7.7 code walkthrough
 
 This guide explains how the application works from the browser down to Cloudflare D1. Read it beside the source files. The inline comments identify important implementation boundaries; this guide explains how those boundaries connect.
 
@@ -16,6 +16,21 @@ For an authenticated screen load, the flow is:
 8. The frontend stores lookup rows in temporary `state` and renders the selected tab.
 
 The browser never connects to D1 directly and contains no database credentials.
+
+## V7.7 feature flow
+
+Projection Rules are event-based. `timeline.ts` derives each recurrence date
+from the rule's start date and applies the full amount only when that date falls
+inside the current timeline interval. This produces visible monthly/annual
+steps and avoids fractional annual payments. A once-only rule is the supported
+way to model a future purchase.
+
+Transaction filtering binds vendor text, category ID, and account ID as SQL
+parameters. Monthly Activity stores its trend selection in browser state;
+clicking a donut slice, ranked category, or account bar builds the corresponding
+trend query. In the account net-worth view, every SVG layer has a stable colour
+and selectable series identifier so the chosen series can display dollar labels
+across the graph.
 
 ## V7.6 feature flow
 
@@ -57,7 +72,8 @@ This is the semantic structure of the site. It contains:
 - The signed-out authentication card.
 - The signed-in collapsible sidebar and mobile slide-over navigation.
 - One `<section class="view">` for each application tab.
-- Native `<dialog>` elements for transaction, account, balance, purchase, and CSV forms.
+- Native `<dialog>` elements for transaction, account, balance, Projection Rule,
+  bulk-edit, and CSV forms.
 - Accessible labels, table headings, status regions, and buttons.
 
 Most sections start hidden. `showView()` in `app.js` activates the section matching the URL hash, such as `#transactions` or `#settings`.
@@ -203,9 +219,10 @@ This module contains pure projection calculations. It does not access D1, the cl
 - With no snapshot, it accumulates known effects.
 
 `buildNetWorthTimeline()` creates actual values through today, then projects
-forward using account-aware recurring rules, equity, dividends, and planned
-purchases. Every point includes both fixed/liquid totals and individual account
-balances for the two chart modes.
+forward using account-aware recurring rules, equity, and dividends. The V7.7
+route intentionally supplies no legacy planned-purchase rows; once-only
+Projection Rules handle that use case. Every point includes both fixed/liquid
+totals and individual account balances for the two chart modes.
 
 ### `worker/src/http.ts`
 

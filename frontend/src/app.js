@@ -24,6 +24,7 @@ const state = {
   summary: null,
   activityMode: "expense",
   selectedMasterCategoryId: null,
+  activityTrendSelection: { kind: "all", id: null, label: "All expenses" },
   bulkEditMode: false,
   selectedTransactionIds: new Set(),
   lastSelectedTransactionIndex: null,
@@ -31,6 +32,7 @@ const state = {
   netWorthMode: "liquidity",
   selectedNetWorthAccounts: new Set(),
   netWorthSelectionInitialized: false,
+  selectedNetWorthSeries: "networth",
   netWorthLiquidityMarkup: "",
 };
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -220,6 +222,10 @@ function refreshSelects() {
     '<option value="">No change</option>' + optionList(state.accounts);
   $("#bulk-category").innerHTML =
     '<option value="">No change</option>' + optionList(state.categories);
+  $("#transaction-category-filter").innerHTML =
+    '<option value="">All categories</option>' + optionList(state.categories);
+  $("#transaction-account-filter").innerHTML =
+    '<option value="">All accounts</option>' + optionList(state.accounts);
 }
 
 async function loadLookups() {
@@ -235,14 +241,6 @@ async function loadLookups() {
   state.masterCategories = masterCategories.data;
   state.categoryRules = categoryRules.data;
   refreshSelects();
-  for (const type of ["expense", "income"]) {
-    const select = $(`#${type}-trend-filter`),
-      previous = select?.value;
-    if (!select) continue;
-    select.innerHTML = trendFilterOptions(type);
-    if ([...select.options].some((option) => option.value === previous))
-      select.value = previous;
-  }
   $("#categories-list").innerHTML = state.categories
     .map(
       (item) =>
@@ -274,12 +272,18 @@ async function loadTransactions() {
     pageSize: String(state.pageSize),
   });
   const search = $("#transaction-search").value.trim(),
+    vendor = $("#transaction-vendor-filter").value.trim(),
+    categoryId = $("#transaction-category-filter").value,
+    accountId = $("#transaction-account-filter").value,
     type = $("#transaction-type-filter").value;
   if ($("#transaction-start-date").value)
     params.set("startDate", $("#transaction-start-date").value);
   if ($("#transaction-end-date").value)
     params.set("endDate", $("#transaction-end-date").value);
   if (search) params.set("search", search);
+  if (vendor) params.set("vendor", vendor);
+  if (categoryId) params.set("categoryId", categoryId);
+  if (accountId) params.set("accountId", accountId);
   if (type) params.set("type", type);
   params.set("sort", $("#transaction-sort").value);
   const result = await api(`/api/v1/transactions?${params}`);
@@ -362,12 +366,18 @@ function selectTransactionAt(index, checked, range = false) {
 function currentTransactionFilters() {
   const params = new URLSearchParams();
   const search = $("#transaction-search").value.trim(),
+    vendor = $("#transaction-vendor-filter").value.trim(),
+    categoryId = $("#transaction-category-filter").value,
+    accountId = $("#transaction-account-filter").value,
     type = $("#transaction-type-filter").value;
   if ($("#transaction-start-date").value)
     params.set("startDate", $("#transaction-start-date").value);
   if ($("#transaction-end-date").value)
     params.set("endDate", $("#transaction-end-date").value);
   if (search) params.set("search", search);
+  if (vendor) params.set("vendor", vendor);
+  if (categoryId) params.set("categoryId", categoryId);
+  if (accountId) params.set("accountId", accountId);
   if (type) params.set("type", type);
   return params;
 }
@@ -377,10 +387,10 @@ function drawBars(selector, rows) {
     ? rows
         .map(
           (row) =>
-            `<div class="bar-row ${row.amountMinor < 0 ? "is-refund-total" : ""}"><span>${escapeHtml(row.name)}</span><div class="bar-track"><div class="bar-fill" style="width:${(Math.abs(row.amountMinor) / max) * 100}%"></div></div><strong>${money.format(dollars(row.amountMinor))}</strong></div>`,
+            `<button class="bar-row activity-account-row ${row.amountMinor < 0 ? "is-refund-total" : ""} ${state.activityTrendSelection.kind === "account" && state.activityTrendSelection.id === row.id ? "selected" : ""}" data-trend-account="${escapeHtml(row.id)}" data-trend-label="${escapeHtml(row.name)}" aria-pressed="${state.activityTrendSelection.kind === "account" && state.activityTrendSelection.id === row.id}"><span>${escapeHtml(row.name)}</span><progress class="bar-track" max="100" value="${(Math.abs(row.amountMinor) / max) * 100}" aria-label="${escapeHtml(row.name)} relative amount"></progress><strong>${money.format(dollars(row.amountMinor))}</strong></button>`,
         )
         .join("")
-    : '<div class="empty">No spending this month.</div>';
+    : `<div class="empty">No ${state.activityMode} activity in this date range.</div>`;
 }
 
 const chartColors = [
@@ -392,6 +402,10 @@ const chartColors = [
   "#bd5e50",
   "#4c8d77",
   "#a77d42",
+  "#2563a6",
+  "#b54773",
+  "#6f7f2c",
+  "#7a5d3b",
 ];
 const masterKey = (value) => value || "unassigned";
 const polarPoint = (angle, radius, center = 110) => ({
@@ -436,7 +450,10 @@ function renderCategoryRanking() {
           const count = Number(row.transaction_count ?? 0);
           const average = count ? row.amount_minor / count : 0;
           const reversalMinor = Number(row.reversal_minor ?? 0);
-          return `<article class="ranked-category-row ${row.amount_minor < 0 ? "is-refund-total" : ""}" tabindex="0"><span class="rank-number">${index + 1}</span><div class="ranked-category-main"><div class="ranked-category-label"><strong>${escapeHtml(row.name)}</strong><span>${money.format(dollars(row.amount_minor))}</span></div><div class="ranked-track"><span style="width:${(Math.abs(row.amount_minor) / max) * 100}%"></span></div></div><div class="category-tooltip" role="tooltip"><strong>${escapeHtml(row.name)}</strong><span>Net actual: ${money.format(dollars(row.amount_minor))}</span><span>${state.activityMode === "income" ? "Target" : "Budget"}: ${periodBudget ? money.format(dollars(periodBudget)) : "Not set"}</span><span>${periodBudget ? `${remaining < 0 ? "Over" : "Remaining"}: ${money.format(dollars(Math.abs(remaining)))}` : ""}</span><span>${count} transaction${count === 1 ? "" : "s"} · Average ${money.format(dollars(average))}</span><span>${reversalMinor ? `${state.activityMode === "expense" ? "Refunds" : "Reversals"}: ${money.format(dollars(reversalMinor))}` : `No ${state.activityMode === "expense" ? "refunds" : "reversals"} in this range`}</span></div></article>`;
+          const selectedCategory =
+            state.activityTrendSelection.kind === "category" &&
+            state.activityTrendSelection.id === row.id;
+          return `<article class="ranked-category-row ${row.amount_minor < 0 ? "is-refund-total" : ""} ${selectedCategory ? "selected" : ""}" data-trend-category="${escapeHtml(row.id)}" data-trend-label="${escapeHtml(row.name)}" tabindex="0" role="button" aria-pressed="${selectedCategory}"><span class="rank-number">${index + 1}</span><div class="ranked-category-main"><div class="ranked-category-label"><strong>${escapeHtml(row.name)}</strong><span>${money.format(dollars(row.amount_minor))}</span></div><progress class="ranked-track" max="100" value="${(Math.abs(row.amount_minor) / max) * 100}" aria-label="${escapeHtml(row.name)} relative amount"></progress></div><div class="category-tooltip" role="tooltip"><strong>${escapeHtml(row.name)}</strong><span>Net actual: ${money.format(dollars(row.amount_minor))}</span><span>${state.activityMode === "income" ? "Target" : "Budget"}: ${periodBudget ? money.format(dollars(periodBudget)) : "Not set"}</span><span>${periodBudget ? `${remaining < 0 ? "Over" : "Remaining"}: ${money.format(dollars(Math.abs(remaining)))}` : ""}</span><span>${count} transaction${count === 1 ? "" : "s"} · Average ${money.format(dollars(average))}</span><span>${reversalMinor ? `${state.activityMode === "expense" ? "Refunds" : "Reversals"}: ${money.format(dollars(reversalMinor))}` : `No ${state.activityMode === "expense" ? "refunds" : "reversals"} in this range`}</span></div></article>`;
         })
         .join("")
     : '<div class="empty">No categories belong to this master category in the selected range.</div>';
@@ -474,7 +491,7 @@ function renderSpendingBreakdown() {
     ? rows
         .map((row, index) => {
           const selected = state.selectedMasterCategoryId === row.key;
-          return `<button class="donut-legend-item ${selected ? "selected" : ""}" data-master-id="${escapeHtml(row.key)}" aria-pressed="${selected}"><i style="background:${chartColors[index % chartColors.length]}"></i><span>${escapeHtml(row.name)}</span><strong>${money.format(dollars(row.amount_minor))}</strong></button>`;
+          return `<button class="donut-legend-item ${selected ? "selected" : ""}" data-master-id="${escapeHtml(row.key)}" aria-pressed="${selected}"><i class="account-color-${index % chartColors.length}"></i><span>${escapeHtml(row.name)}</span><strong>${money.format(dollars(row.amount_minor))}</strong></button>`;
         })
         .join("")
     : "";
@@ -483,9 +500,35 @@ function renderSpendingBreakdown() {
 function selectMasterCategory(value) {
   state.selectedMasterCategoryId =
     state.selectedMasterCategoryId === value ? null : value;
+  const master = state.summary?.activity?.[
+    state.activityMode
+  ]?.byMasterCategory.find((row) => masterKey(row.id) === value);
+  state.activityTrendSelection = state.selectedMasterCategoryId
+    ? { kind: "master", id: value, label: master?.name ?? "Master category" }
+    : {
+        kind: "all",
+        id: null,
+        label: `All ${state.activityMode === "expense" ? "expenses" : "income"}`,
+      };
   renderSpendingBreakdown();
   renderFilteredActivityCards();
-  void loadTrend(state.activityMode, state.selectedMasterCategoryId);
+  void loadTrend();
+}
+
+function selectActivityTrend(kind, id, label) {
+  const selected =
+    state.activityTrendSelection.kind === kind &&
+    state.activityTrendSelection.id === id;
+  state.activityTrendSelection = selected
+    ? {
+        kind: "all",
+        id: null,
+        label: `All ${state.activityMode === "expense" ? "expenses" : "income"}`,
+      }
+    : { kind, id, label };
+  renderCategoryRanking();
+  renderFilteredActivityCards();
+  void loadTrend();
 }
 function aggregateAccountRows(rows) {
   const totals = new Map();
@@ -545,11 +588,14 @@ function setActivityMode(mode) {
   $("#activity-trend-title").textContent = income
     ? "Income trend"
     : "Expense trend";
-  const select = $("#expense-trend-filter");
-  select.innerHTML = trendFilterOptions(mode);
+  state.activityTrendSelection = {
+    kind: "all",
+    id: null,
+    label: `All ${income ? "income" : "expenses"}`,
+  };
   renderSpendingBreakdown();
   renderFilteredActivityCards();
-  void loadTrend(mode);
+  void loadTrend();
 }
 async function loadSummary() {
   const range = new URLSearchParams({
@@ -564,8 +610,14 @@ async function loadSummary() {
     !data.activity[state.activityMode].byMasterCategory.some(
       (row) => masterKey(row.id) === state.selectedMasterCategoryId,
     )
-  )
+  ) {
     state.selectedMasterCategoryId = null;
+    state.activityTrendSelection = {
+      kind: "all",
+      id: null,
+      label: `All ${state.activityMode === "expense" ? "expenses" : "income"}`,
+    };
+  }
   $("#income-total").textContent = money.format(dollars(data.incomeMinor));
   $("#expense-total").textContent = money.format(dollars(data.expenseMinor));
   $("#cashflow-total").textContent = money.format(
@@ -584,14 +636,7 @@ async function loadSummary() {
     `Showing ${data.startDate} through ${data.endDate} (${data.monthCount} budget month${data.monthCount === 1 ? "" : "s"}).`;
   renderSpendingBreakdown();
   renderFilteredActivityCards();
-  await loadTrend(state.activityMode, state.selectedMasterCategoryId);
-}
-
-function trendFilterOptions(type) {
-  const categories = state.categories.filter(
-    (item) => item.active !== 0 && item.kind === type,
-  );
-  return `<option value="all">All ${type === "expense" ? "expenses" : "income"}</option><optgroup label="Master categories">${optionList(state.masterCategories).replaceAll('value="', 'value="master:')}</optgroup><optgroup label="Categories">${optionList(categories).replaceAll('value="', 'value="category:')}</optgroup>`;
+  await loadTrend();
 }
 function drawTrend(selector, rows) {
   if (!rows.length) {
@@ -651,19 +696,21 @@ function drawTrend(selector, rows) {
   $(selector).innerHTML =
     `<div class="trend-chart-frame"><svg viewBox="0 0 1200 455" role="img" aria-label="Actual, budget, and average monthly trend with monthly and dollar labels">${grid}${months}<path class="trend-actual" d="${path("actualMinor")}"/><path class="trend-budget" d="${path("budgetMinor")}"/><path class="trend-average" d="${path("averageMinor")}"/>${points}</svg></div><div class="trend-legend"><span class="actual-key">Actual</span><span class="budget-key">Budget</span><span class="average-key">Average actual</span></div>`;
 }
-async function loadTrend(type, masterOverride = null) {
-  const selector = $("#expense-trend-filter"),
-    value = masterOverride
-      ? `master:${masterOverride}`
-      : selector.value || "all";
+async function loadTrend() {
+  const selection = state.activityTrendSelection,
+    type = state.activityMode;
   const params = new URLSearchParams({
     startDate: $("#summary-start-date").value,
     endDate: $("#summary-end-date").value,
     type,
   });
-  if (value.startsWith("category:")) params.set("categoryId", value.slice(9));
-  if (value.startsWith("master:"))
-    params.set("masterCategoryId", value.slice(7));
+  if (state.selectedMasterCategoryId)
+    params.set("masterCategoryId", state.selectedMasterCategoryId);
+  if (selection.kind === "category") params.set("categoryId", selection.id);
+  if (selection.kind === "account") params.set("accountId", selection.id);
+  $("#activity-trend-filter-label").textContent = `Showing ${selection.label}`;
+  $("#clear-activity-trend-filter").hidden =
+    selection.kind === "all" || selection.kind === "master";
   const result = await api(`/api/v1/spending-trends?${params}`);
   drawTrend("#expense-trend-chart", result.data);
 }
@@ -701,14 +748,12 @@ async function loadNetWorth() {
     startDate: $("#networth-start-date").value,
     endDate: $("#networth-end-date").value,
   });
-  const [balances, projection, timeline, purchases, projectionRules] =
-    await Promise.all([
-      api("/api/v1/balance-snapshots"),
-      api("/api/v1/projection"),
-      api(`/api/v1/net-worth-timeline?${range}`),
-      api("/api/v1/future-purchases"),
-      api("/api/v1/projection-rules"),
-    ]);
+  const [balances, projection, timeline, projectionRules] = await Promise.all([
+    api("/api/v1/balance-snapshots"),
+    api("/api/v1/projection"),
+    api(`/api/v1/net-worth-timeline?${range}`),
+    api("/api/v1/projection-rules"),
+  ]);
   const latest = new Map();
   balances.data.forEach((row) => latest.set(row.accountId, row));
   $("#balances-body").innerHTML = balances.data
@@ -733,18 +778,14 @@ async function loadNetWorth() {
               : item.ruleType === "expense"
                 ? `From ${item.fromAccountName}`
                 : `${item.fromAccountName} → ${item.toAccountName}`;
-          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType)} · ${escapeHtml(item.frequency)} · ${escapeHtml(route)}</span></div><div><strong>${money.format(dollars(item.amountMinor))}</strong><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
+          const schedule =
+            item.frequency === "once"
+              ? `once on ${item.startDate}`
+              : `${item.frequency} from ${item.startDate}`;
+          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType)} · ${escapeHtml(schedule)} · ${escapeHtml(route)}</span></div><div><strong>${money.format(dollars(item.amountMinor))}</strong><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
         })
         .join("")
-    : '<div class="empty">No account-aware rules yet. Add salary, expenses, transfers, or debt payments to project them.</div>';
-  $("#future-purchases-list").innerHTML = purchases.data.length
-    ? purchases.data
-        .map(
-          (item) =>
-            `<div class="future-purchase"><span><strong>${escapeHtml(item.purchaseDate)}</strong> · ${escapeHtml(item.description)} · ${escapeHtml(item.accountName)}</span><span>${money.format(dollars(item.amountMinor))} <button class="secondary danger delete-future-purchase" data-id="${escapeHtml(item.id)}">Delete</button></span></div>`,
-        )
-        .join("")
-    : '<div class="empty">No planned purchases.</div>';
+    : '<div class="empty">No projection rules yet. Add salary, expenses, transfers, debt payments, or a once-only purchase.</div>';
   const points = timeline.data.points;
   state.netWorthTimeline = timeline.data;
   if (!points.length) {
@@ -855,10 +896,10 @@ function accountIsLiability(account) {
   return ["liability", "credit_card"].includes(account.accountType);
 }
 function accountColor(accountId) {
-  let hash = 0;
-  for (const character of accountId)
-    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  return chartColors[hash % chartColors.length];
+  const ids = timelineAccounts()
+    .map((account) => account.id)
+    .sort();
+  return chartColors[Math.max(0, ids.indexOf(accountId)) % chartColors.length];
 }
 function initializeNetWorthAccountSelection() {
   const ids = new Set(timelineAccounts().map((account) => account.id));
@@ -875,7 +916,8 @@ function renderNetWorthAccountControls() {
   $("#networth-account-toggles").innerHTML = accounts
     .map((account) => {
       const checked = state.selectedNetWorthAccounts.has(account.id);
-      return `<label class="account-toggle ${accountIsLiability(account) ? "liability-account" : "asset-account"}"><input type="checkbox" data-networth-account="${escapeHtml(account.id)}" ${checked ? "checked" : ""}/><i style="--account-color:${accountColor(account.id)}"></i><span>${escapeHtml(account.name)} <small>${accountIsLiability(account) ? "liability" : "asset"}</small></span></label>`;
+      const colorIndex = chartColors.indexOf(accountColor(account.id));
+      return `<label class="account-toggle account-color-${colorIndex} ${accountIsLiability(account) ? "liability-account" : "asset-account"}"><input type="checkbox" data-networth-account="${escapeHtml(account.id)}" ${checked ? "checked" : ""}/><i></i><span>${escapeHtml(account.name)} <small>${accountIsLiability(account) ? "liability" : "asset"}</small></span></label>`;
     })
     .join("");
 }
@@ -921,6 +963,11 @@ function renderAccountNetWorthChart() {
     $("#networth-account-detail").hidden = true;
     return;
   }
+  if (
+    state.selectedNetWorthSeries !== "networth" &&
+    !accounts.some((account) => account.id === state.selectedNetWorthSeries)
+  )
+    state.selectedNetWorthSeries = "networth";
   const layers = accounts.map((account) => ({ account, lower: [], upper: [] })),
     totals = [];
   points.forEach((point, pointIndex) => {
@@ -989,13 +1036,14 @@ function renderAccountNetWorthChart() {
       const hoverPoints = points
         .map((point, pointIndex) => {
           const value = accountBalance(point, layer.account.id);
-          return `<circle class="account-hover-target" data-account-id="${escapeHtml(layer.account.id)}" data-point-index="${pointIndex}" cx="${x(pointIndex)}" cy="${y(layer.upper[pointIndex])}" r="9" tabindex="0"><title>${escapeHtml(layer.account.name)}\n${point.date}: ${money.format(dollars(value))}</title></circle>`;
+          return `<circle class="account-hover-target" data-networth-series="${escapeHtml(layer.account.id)}" data-account-id="${escapeHtml(layer.account.id)}" data-point-index="${pointIndex}" cx="${x(pointIndex)}" cy="${y(layer.upper[pointIndex])}" r="9" tabindex="0"><title>${escapeHtml(layer.account.name)}\n${point.date}: ${money.format(dollars(value))}</title></circle>`;
         })
         .join("");
       const fill = accountIsLiability(layer.account)
         ? `url(#liability-${escapeHtml(layer.account.id)})`
         : accountColor(layer.account.id);
-      return `<g class="account-layer ${accountIsLiability(layer.account) ? "liability-layer" : "asset-layer"}"><path d="${area}" style="fill:${fill}"><title>${escapeHtml(layer.account.name)} · ${accountIsLiability(layer.account) ? "liability below zero" : "asset above zero"}</title></path>${hoverPoints}</g>`;
+      const selected = state.selectedNetWorthSeries === layer.account.id;
+      return `<g class="account-layer ${accountIsLiability(layer.account) ? "liability-layer" : "asset-layer"} ${selected ? "series-selected" : state.selectedNetWorthSeries === "networth" ? "" : "series-muted"}"><path class="account-series-path" data-networth-series="${escapeHtml(layer.account.id)}" d="${area}" fill="${fill}" tabindex="0"><title>${escapeHtml(layer.account.name)} · ${accountIsLiability(layer.account) ? "liability below zero" : "asset above zero"}</title></path>${hoverPoints}</g>`;
     })
     .join("");
   const tickValues = Array.from(
@@ -1017,13 +1065,30 @@ function renderAccountNetWorthChart() {
       )
       .join(""),
     totalLine = path(totals),
+    selectedLayer = layers.find(
+      (layer) => layer.account.id === state.selectedNetWorthSeries,
+    ),
+    selectedValues = selectedLayer
+      ? points.map((point) => accountBalance(point, selectedLayer.account.id))
+      : totals,
+    selectedCoordinates = selectedLayer?.upper ?? totals,
+    selectedColor = selectedLayer
+      ? accountColor(selectedLayer.account.id)
+      : "#10251d",
+    valueLabels = points
+      .map((point, index) =>
+        index % labelStep === 0 || index === points.length - 1
+          ? `<text class="account-series-value" x="${x(index)}" y="${Math.max(plot.top + 12, y(selectedCoordinates[index]) - 9)}" fill="${selectedColor}">${currencyLabel(selectedValues[index])}</text>`
+          : "",
+      )
+      .join(""),
     todayIndex = points.findIndex((point) => point.date === timeline.today),
     todayLine =
       todayIndex < 0
         ? ""
         : `<line class="today-line" x1="${x(todayIndex)}" y1="${plot.top}" x2="${x(todayIndex)}" y2="${plot.bottom}"/><text class="today-label" x="${Math.min(plot.right - 45, x(todayIndex) + 8)}" y="${plot.top + 15}">Today</text>`;
   $("#projection-chart").innerHTML =
-    `<div class="chart-scroll"><svg viewBox="0 0 1200 470" role="img" aria-label="Diverging account composition with assets above zero and liabilities below zero"><defs>${patternDefinitions}</defs>${grid}${areas}<line class="zero-line" x1="${plot.left}" y1="${y(0)}" x2="${plot.right}" y2="${y(0)}"/><text class="account-side-label" x="${plot.left + 8}" y="${Math.max(plot.top + 16, y(0) - 10)}">Assets</text><text class="account-side-label" x="${plot.left + 8}" y="${Math.min(plot.bottom - 8, y(0) + 20)}">Liabilities</text><path class="account-total-line" d="${totalLine}"/>${todayLine}${months}</svg></div><div class="chart-values"><span>${accounts.length} account${accounts.length === 1 ? "" : "s"} selected · solid assets / striped liabilities</span><span>Selected net worth: ${money.format(dollars(totals.at(-1)))}</span></div>`;
+    `<div class="chart-scroll"><svg viewBox="0 0 1200 470" role="img" aria-label="Diverging account composition with assets above zero and liabilities below zero"><defs>${patternDefinitions}</defs>${grid}${areas}<line class="zero-line" x1="${plot.left}" y1="${y(0)}" x2="${plot.right}" y2="${y(0)}"/><text class="account-side-label" x="${plot.left + 8}" y="${Math.max(plot.top + 16, y(0) - 10)}">Assets</text><text class="account-side-label" x="${plot.left + 8}" y="${Math.min(plot.bottom - 8, y(0) + 20)}">Liabilities</text><path class="account-total-line ${state.selectedNetWorthSeries === "networth" ? "series-selected" : "series-muted"}" data-networth-series="networth" tabindex="0" d="${totalLine}"/><path class="account-total-hit" data-networth-series="networth" d="${totalLine}"/>${valueLabels}${todayLine}${months}</svg></div><div class="chart-values"><span>${accounts.length} account${accounts.length === 1 ? "" : "s"} selected · each colour is one account</span><span>Selected net worth: ${money.format(dollars(totals.at(-1)))}</span></div>`;
   showNetWorthAccountDetail(accounts[0].id, points.length - 1);
 }
 function setNetWorthMode(mode) {
@@ -1226,9 +1291,33 @@ async function loadImportSuggestions() {
 }
 
 document.addEventListener("click", (event) => {
+  const netWorthSeries = event.target.closest?.("[data-networth-series]");
+  if (netWorthSeries) {
+    state.selectedNetWorthSeries = netWorthSeries.dataset.networthSeries;
+    renderAccountNetWorthChart();
+    return;
+  }
   const masterTarget = event.target.closest?.("[data-master-id]");
   if (masterTarget) {
     selectMasterCategory(masterTarget.dataset.masterId);
+    return;
+  }
+  const categoryTrendTarget = event.target.closest?.("[data-trend-category]");
+  if (categoryTrendTarget) {
+    selectActivityTrend(
+      "category",
+      categoryTrendTarget.dataset.trendCategory,
+      categoryTrendTarget.dataset.trendLabel,
+    );
+    return;
+  }
+  const accountTrendTarget = event.target.closest?.("[data-trend-account]");
+  if (accountTrendTarget) {
+    selectActivityTrend(
+      "account",
+      accountTrendTarget.dataset.trendAccount,
+      accountTrendTarget.dataset.trendLabel,
+    );
     return;
   }
   const transactionCheckbox = event.target.closest?.(".transaction-select");
@@ -1259,7 +1348,27 @@ document.addEventListener("click", (event) => {
   if (!target) return;
   if (target.id === "clear-master-filter") {
     state.selectedMasterCategoryId = null;
+    state.activityTrendSelection = {
+      kind: "all",
+      id: null,
+      label: `All ${state.activityMode === "expense" ? "expenses" : "income"}`,
+    };
     renderSpendingBreakdown();
+    renderFilteredActivityCards();
+    void loadTrend();
+    return;
+  }
+  if (target.id === "clear-activity-trend-filter") {
+    state.activityTrendSelection = {
+      kind: state.selectedMasterCategoryId ? "master" : "all",
+      id: state.selectedMasterCategoryId,
+      label: state.selectedMasterCategoryId
+        ? (state.summary.activity[state.activityMode].byMasterCategory.find(
+            (row) => masterKey(row.id) === state.selectedMasterCategoryId,
+          )?.name ?? "Master category")
+        : `All ${state.activityMode === "expense" ? "expenses" : "income"}`,
+    };
+    renderCategoryRanking();
     renderFilteredActivityCards();
     void loadTrend();
     return;
@@ -1379,15 +1488,9 @@ document.addEventListener("click", (event) => {
       $("#account-form").elements.id.value = "";
       $("#account-title").textContent = "Add account";
     }
-    if (target.dataset.dialog === "future-purchase-dialog") {
-      $("#future-purchase-form").reset();
-      const purchaseDate = $("#future-purchase-form").elements.purchaseDate;
-      purchaseDate.min = tomorrow();
-      purchaseDate.value = shiftYears(today(), 1);
-    }
     if (target.dataset.dialog === "projection-rule-dialog") {
       $("#projection-rule-form").reset();
-      $("#projection-rule-form").elements.startDate.value = today();
+      $("#projection-rule-form").elements.startDate.value = tomorrow();
       updateProjectionRuleFields();
     }
     dialog.showModal();
@@ -1473,17 +1576,6 @@ document.addEventListener("click", (event) => {
       notify("Category rule archived.");
     });
   if (
-    target.classList.contains("delete-future-purchase") &&
-    confirm("Delete this planned purchase?")
-  )
-    void run(async () => {
-      await api(`/api/v1/future-purchases/${target.dataset.id}`, {
-        method: "DELETE",
-      });
-      notify("Planned purchase deleted.");
-      await loadNetWorth();
-    });
-  if (
     target.classList.contains("delete-projection-rule") &&
     confirm("Delete this projection rule?")
   )
@@ -1548,10 +1640,26 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  const series = event.target.closest?.("[data-networth-series]");
+  if (series && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    state.selectedNetWorthSeries = series.dataset.networthSeries;
+    renderAccountNetWorthChart();
+    return;
+  }
   const target = event.target.closest?.(".donut-slice[data-master-id]");
   if (target && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();
     selectMasterCategory(target.dataset.masterId);
+  }
+  const category = event.target.closest?.("[data-trend-category]");
+  if (category && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    selectActivityTrend(
+      "category",
+      category.dataset.trendCategory,
+      category.dataset.trendLabel,
+    );
   }
 });
 for (const eventName of ["mouseover", "focusin", "click"])
@@ -1606,25 +1714,6 @@ $("#balance-form").addEventListener("submit", (event) => {
     });
     $("#balance-dialog").close();
     notify("Balance recorded.");
-    await loadNetWorth();
-  });
-});
-$("#future-purchase-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  const formElement = event.currentTarget;
-  void run(async () => {
-    const form = new FormData(formElement);
-    await api("/api/v1/future-purchases", {
-      method: "POST",
-      body: JSON.stringify({
-        description: form.get("description"),
-        amountMinor: cents(form.get("amount")),
-        purchaseDate: form.get("purchaseDate"),
-        accountId: form.get("accountId"),
-      }),
-    });
-    $("#future-purchase-dialog").close();
-    notify("Future purchase added to the projection.");
     await loadNetWorth();
   });
 });
@@ -1883,10 +1972,6 @@ $("#apply-summary-range").addEventListener(
 $("#apply-networth-range").addEventListener(
   "click",
   () => void run(loadNetWorth),
-);
-$("#expense-trend-filter").addEventListener(
-  "change",
-  () => void run(() => loadTrend(state.activityMode)),
 );
 window.addEventListener("hashchange", () => void showView());
 $("#show-login").addEventListener("click", () => {

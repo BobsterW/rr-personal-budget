@@ -1,6 +1,24 @@
-# R&R Budget v7.6
+# R&R Budget v7.7
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.7 changes
+
+- Posts monthly, yearly, and once-only Projection Rules on their actual
+  scheduled dates. Annual costs now appear as annual steps instead of being
+  averaged across twelve months.
+- Replaces the separate planned-purchase interface with once-only Projection
+  Rules. Legacy planned-purchase records remain stored for compatibility but
+  are no longer included in new projections.
+- Gives every selected net-worth account a stable colour, strengthens the total
+  net-worth line, and lets a click or keyboard selection show dated dollar
+  labels for either an account or total net worth.
+- Adds explicit vendor, category, and account filters to Transactions, including
+  the bulk "select all filtered" workflow.
+- Removes the Monthly Activity trend dropdown. Clicking a master-category
+  donut slice, ranked category, or account bar now filters the trend directly.
+- Keeps category and account bar lengths proportional to the largest visible
+  dollar amount, without minimum widths or percentage labels.
 
 ## V7.6 changes
 
@@ -77,7 +95,7 @@ A private, multi-user budget and net-worth application inspired by `R&R Expenses
 - `database/`: forward-only Cloudflare D1 migrations and invented development seeds
 - `.github/workflows/`: pull-request checks and main-branch production deployment
 
-The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.6 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
+The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.7 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
 
 For a detailed, file-by-file explanation, read [`CODE_WALKTHROUGH.md`](CODE_WALKTHROUGH.md).
 
@@ -122,7 +140,10 @@ The workbook contained broken and Excel-version-sensitive formulas. The app does
   not financial advice.
 - The full-width timeline displays monthly currency values, gridlines, tooltips, historical/projected styling, and a today marker.
 - Historical net worth starts from dated account balance snapshots and applies each transaction's signed balance effect. Expenses reduce balances and income raises balances. Imported debit/credit signs are preserved; legacy transfers with no known direction are excluded rather than guessed.
-- Future purchases reduce the selected account on their planned date. The timeline uses solid historical lines, dashed projected lines, and a vertical marker for today.
+- Once-only Projection Rules reduce or increase the selected account on their
+  exact scheduled date. Monthly and yearly rules likewise post as discrete
+  events instead of being averaged across the year. The timeline distinguishes
+  historical and projected values and includes a vertical marker for today.
 
 ## Prerequisites
 

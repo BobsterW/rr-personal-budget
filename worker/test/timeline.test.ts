@@ -124,4 +124,48 @@ describe("net-worth timeline", () => {
     ).toBe(false);
     expect(last.netWorthMinor).toBe(170_000);
   });
+
+  it("posts yearly and once-only rules as discrete scheduled events", () => {
+    const points = buildNetWorthTimeline(
+      accounts,
+      [{ accountId: "cash", date: "2026-01-01", balanceMinor: 5_000_000 }],
+      [],
+      [],
+      assumptions,
+      "2026-01-01",
+      "2028-01-01",
+      "2026-01-01",
+      [
+        {
+          id: "insurance",
+          description: "Insurance",
+          ruleType: "expense",
+          amountMinor: 800_000,
+          frequency: "yearly",
+          startDate: "2026-06-15",
+          endDate: null,
+          fromAccountId: "cash",
+          toAccountId: null,
+        },
+        {
+          id: "purchase",
+          description: "One-time purchase",
+          ruleType: "expense",
+          amountMinor: 200_000,
+          frequency: "once",
+          startDate: "2027-03-10",
+          endDate: null,
+          fromAccountId: "cash",
+          toAccountId: null,
+        },
+      ],
+    );
+    const value = (date: string) =>
+      points.find((point) => point.date === date)?.accounts[0]?.balanceMinor;
+    expect(value("2026-06-01")).toBe(5_000_000);
+    expect(value("2026-07-01")).toBe(4_200_000);
+    expect(value("2027-03-01")).toBe(4_200_000);
+    expect(value("2027-04-01")).toBe(4_000_000);
+    expect(value("2027-07-01")).toBe(3_200_000);
+  });
 });

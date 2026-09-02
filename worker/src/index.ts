@@ -23,7 +23,6 @@ import { buildNetWorthTimeline } from "./timeline";
 import type {
   TimelineAccount,
   TimelineEffect,
-  TimelinePurchase,
   TimelineSnapshot,
 } from "./timeline";
 import type {
@@ -752,6 +751,7 @@ async function route(request: Request, env: Env): Promise<Response> {
         type,
         url.searchParams.get("categoryId") ?? undefined,
         url.searchParams.get("masterCategoryId") ?? undefined,
+        url.searchParams.get("accountId") ?? undefined,
       ),
     });
   }
@@ -956,11 +956,6 @@ async function route(request: Request, env: Env): Promise<Response> {
       date: String(row.transaction_date),
       effectMinor: Number(row.balance_effect_minor),
     }));
-    const purchases: TimelinePurchase[] = raw.purchases.map((row) => ({
-      accountId: String(row.account_id),
-      date: String(row.purchase_date),
-      amountMinor: Number(row.amount_minor),
-    }));
     const projectionRules: ProjectionRule[] = raw.projectionRules.map((row) => {
       const item = toCamel(row);
       return {
@@ -990,7 +985,7 @@ async function route(request: Request, env: Env): Promise<Response> {
           accounts,
           snapshots,
           effects,
-          purchases,
+          [],
           assumptions,
           startDate,
           endDate,

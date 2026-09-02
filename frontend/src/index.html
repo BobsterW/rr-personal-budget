@@ -170,6 +170,19 @@
               type="search"
               placeholder="Vendor or description" /></label
           ><label
+            >Vendor<input
+              id="transaction-vendor-filter"
+              type="search"
+              placeholder="Vendor contains…" /></label
+          ><label
+            >Category<select id="transaction-category-filter">
+              <option value="">All categories</option>
+            </select></label
+          ><label
+            >Account<select id="transaction-account-filter">
+              <option value="">All accounts</option>
+            </select></label
+          ><label
             >Type<select id="transaction-type-filter">
               <option value="">All types</option>
               <option>expense</option>
@@ -341,12 +354,21 @@
         </section>
         <div class="monthly-trend-stack">
           <section class="panel">
-            <h2 id="activity-trend-title">Expense trend</h2>
-            <label
-              >Category or master category<select
-                id="expense-trend-filter"
-              ></select
-            ></label>
+            <div class="panel-heading">
+              <div>
+                <h2 id="activity-trend-title">Expense trend</h2>
+                <p id="activity-trend-filter-label" class="fine-print">
+                  Showing all expenses
+                </p>
+              </div>
+              <button
+                id="clear-activity-trend-filter"
+                class="secondary compact"
+                hidden
+              >
+                Clear visual filter
+              </button>
+            </div>
             <div id="expense-trend-chart" class="trend-chart"></div>
           </section>
         </div>
@@ -400,9 +422,6 @@
             <button id="apply-networth-range">Apply</button>
             <button class="secondary" data-dialog="balance-dialog">
               Record balance
-            </button>
-            <button class="secondary" data-dialog="future-purchase-dialog">
-              Plan purchase
             </button>
           </div>
         </div>
@@ -489,7 +508,7 @@
         <section class="panel projection-assumptions-panel">
           <div class="panel-heading">
             <div>
-              <h2>Account-aware projection rules</h2>
+              <h2>Projection Rules</h2>
               <p>
                 Route future income, expenses, transfers, and debt payments
                 through real accounts.
@@ -521,10 +540,6 @@
               <tbody id="balances-body"></tbody>
             </table>
           </div>
-        </section>
-        <section class="panel">
-          <h2>Planned future purchases</h2>
-          <div id="future-purchases-list" class="settings-list"></div>
         </section>
       </section>
       <section id="settings" class="view" hidden>
@@ -720,50 +735,10 @@
         </div>
       </form>
     </dialog>
-    <dialog id="future-purchase-dialog">
-      <form id="future-purchase-form">
-        <div class="dialog-heading">
-          <h2>Plan a future purchase</h2>
-          <button
-            type="button"
-            class="icon secondary"
-            data-close
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </div>
-        <div class="form-grid">
-          <label class="wide"
-            >Description<input name="description" maxlength="500" required
-          /></label>
-          <label
-            >Amount (CAD)<input
-              name="amount"
-              type="number"
-              min="0.01"
-              step="0.01"
-              required
-          /></label>
-          <label
-            >Purchase date<input name="purchaseDate" type="date" required
-          /></label>
-          <label>Account<select name="accountId" required></select></label>
-        </div>
-        <p class="fine-print">
-          The amount is deducted from the selected account on this date in the
-          projection.
-        </p>
-        <div class="dialog-actions">
-          <button type="button" class="secondary" data-close>Cancel</button
-          ><button>Save planned purchase</button>
-        </div>
-      </form>
-    </dialog>
     <dialog id="projection-rule-dialog">
       <form id="projection-rule-form">
         <div class="dialog-heading">
-          <h2>Add account-aware projection rule</h2>
+          <h2>Add Projection Rule</h2>
           <button
             type="button"
             class="icon secondary"
@@ -946,7 +921,7 @@
         </div>
       </form>
     </dialog>
-    <script src="config.js?v=7.6.0"></script>
-    <script type="module" src="app.js?v=7.6.0"></script>
+    <script src="config.js?v=7.7.0"></script>
+    <script type="module" src="app.js?v=7.7.0"></script>
   </body>
 </html>
