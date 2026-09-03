@@ -32,6 +32,8 @@ const state = {
   selectedNetWorthAccounts: new Set(),
   netWorthSelectionInitialized: false,
   selectedNetWorthSeries: "networth",
+  balanceSnapshots: [],
+  projectionRules: [],
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -751,13 +753,8 @@ async function loadNetWorth() {
   ]);
   const latest = new Map();
   state.projectionRules = projectionRules.data;
+  state.balanceSnapshots = balances.data;
   balances.data.forEach((row) => latest.set(row.accountId, row));
-  $("#balances-body").innerHTML = balances.data
-    .map(
-      (row) =>
-        `<tr><td>${escapeHtml(row.snapshotDate)}</td><td>${escapeHtml(row.accountName)}</td><td>${escapeHtml(row.accountType)}</td><td class="money">${money.format(dollars(row.balanceMinor))}</td><td><button class="secondary danger delete-balance" data-id="${escapeHtml(row.id)}">Delete</button></td></tr>`,
-    )
-    .join("");
   const assets = projection.data.startAssetsMinor,
     liabilities = projection.data.startLiabilitiesMinor;
   $("#assets-total").textContent = money.format(dollars(assets));
@@ -765,23 +762,6 @@ async function loadNetWorth() {
   $("#networth-total").textContent = money.format(
     dollars(assets - liabilities),
   );
-  $("#projection-rules-list").innerHTML = projectionRules.data.length
-    ? projectionRules.data
-        .map((item) => {
-          const route =
-            item.ruleType === "income"
-              ? `Into ${item.toAccountName}`
-              : item.ruleType === "expense"
-                ? `From ${item.fromAccountName}`
-                : `${item.fromAccountName} → ${item.toAccountName}`;
-          const schedule =
-            item.frequency === "once"
-              ? `once on ${item.startDate}`
-              : `${item.frequency} from ${item.startDate}`;
-          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType)} · ${escapeHtml(schedule)} · ${escapeHtml(route)}</span></div><div><strong>${money.format(dollars(item.amountMinor))}</strong><button class="secondary edit-projection-rule" data-id="${escapeHtml(item.id)}">Edit</button><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
-        })
-        .join("")
-    : '<div class="empty">No projection rules yet. Add salary, expenses, transfers, debt payments, or a once-only purchase.</div>';
   const points = timeline.data.points;
   state.netWorthTimeline = timeline.data;
   if (!points.length) {
@@ -878,6 +858,43 @@ async function loadNetWorth() {
   initializeNetWorthAccountSelection();
   renderNetWorthAccountControls();
   renderAccountNetWorthChart();
+  renderNetWorthRelatedLists();
+}
+
+function renderNetWorthRelatedLists() {
+  const selected = state.selectedNetWorthAccounts;
+  const rules = state.projectionRules.filter(
+    (item) =>
+      selected.has(item.fromAccountId) || selected.has(item.toAccountId),
+  );
+  $("#projection-rules-list").innerHTML = rules.length
+    ? rules
+        .map((item) => {
+          const route =
+            item.ruleType === "income"
+              ? `Into ${item.toAccountName}`
+              : item.ruleType === "expense"
+                ? `From ${item.fromAccountName}`
+                : `${item.fromAccountName} → ${item.toAccountName}`;
+          const schedule =
+            item.frequency === "once"
+              ? `once on ${item.startDate}`
+              : `${item.frequency} from ${item.startDate}`;
+          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType)} · ${escapeHtml(schedule)} · ${escapeHtml(route)}</span></div><div><strong>${money.format(dollars(item.amountMinor))}</strong><button class="secondary edit-projection-rule" data-id="${escapeHtml(item.id)}">Edit</button><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
+        })
+        .join("")
+    : '<div class="empty">No projection rules affect the selected accounts.</div>';
+  const balances = state.balanceSnapshots.filter((row) =>
+    selected.has(row.accountId),
+  );
+  $("#balances-body").innerHTML = balances.length
+    ? balances
+        .map(
+          (row) =>
+            `<tr><td>${escapeHtml(row.snapshotDate)}</td><td>${escapeHtml(row.accountName)}</td><td>${escapeHtml(row.accountType)}</td><td class="money">${money.format(dollars(row.balanceMinor))}</td><td><button class="secondary edit-balance" data-id="${escapeHtml(row.id)}">Edit</button> <button class="secondary danger delete-balance" data-id="${escapeHtml(row.id)}">Delete</button></td></tr>`,
+        )
+        .join("")
+    : '<tr><td colspan="5" class="empty">No recorded balances for the selected accounts.</td></tr>';
 }
 
 function timelineAccounts() {
@@ -1157,13 +1174,46 @@ function importMapping(headers) {
   };
 }
 function importRowAmount(row, index) {
-  if (index.amount >= 0 && row[index.amount] !== "")
-    return parseMoney(row[index.amount]);
-  const debit = index.debit >= 0 ? parseMoney(row[index.debit]) : 0;
-  const credit = index.credit >= 0 ? parseMoney(row[index.credit]) : 0;
-  if (Number.isFinite(debit) && debit > 0) return -debit;
-  if (Number.isFinite(credit) && credit > 0) return credit;
-  return NaN;
+  return importRowMoney(row, index).amount;
+}
+function importRowMoney(row, index) {
+  if (index.amount >= 0 && String(row[index.amount] ?? "").trim() !== "") {
+    const amount = parseMoney(row[index.amount]);
+    return {
+      amount,
+      direction: amount >= 0 ? "credit" : "debit",
+      error: Number.isFinite(amount) ? "" : "The amount is not a number.",
+    };
+  }
+  const debitText =
+    index.debit >= 0 ? String(row[index.debit] ?? "").trim() : "";
+  const creditText =
+    index.credit >= 0 ? String(row[index.credit] ?? "").trim() : "";
+  if (debitText && creditText)
+    return {
+      amount: NaN,
+      direction: null,
+      error: "Both outgoing and incoming columns contain a value.",
+    };
+  if (!debitText && !creditText)
+    return {
+      amount: NaN,
+      direction: null,
+      error: "Neither outgoing nor incoming column contains a value.",
+    };
+  const outgoing = Boolean(debitText),
+    parsed = parseMoney(outgoing ? debitText : creditText);
+  return {
+    amount: Number.isFinite(parsed)
+      ? outgoing
+        ? -Math.abs(parsed)
+        : Math.abs(parsed)
+      : NaN,
+    direction: outgoing ? "debit" : "credit",
+    error: Number.isFinite(parsed)
+      ? ""
+      : `The ${outgoing ? "outgoing" : "incoming"} amount is not a number.`,
+  };
 }
 function inferImportType(amount, vendor) {
   if (
@@ -1207,7 +1257,8 @@ function renderImportPreview() {
   $("#import-preview").innerHTML =
     `<table class="import-table"><thead><tr><th>Include</th><th>Date</th><th>Vendor</th><th>Amount</th><th>Type</th><th>Category</th><th>Optional description</th></tr></thead><tbody>${rows
       .map((row, i) => {
-        const amount = importRowAmount(row, index);
+        const moneyCell = importRowMoney(row, index);
+        const amount = moneyCell.amount;
         const vendor = row[index.vendor] ?? "";
         let type = inferImportType(amount, vendor);
         if (type === "income" && outgoingAmounts.has(Math.abs(amount)))
@@ -1226,7 +1277,7 @@ function renderImportPreview() {
         const selectedCategory = matching.some((item) => item.id === suggested)
           ? suggested
           : fallback;
-        return `<tr><td><input type="checkbox" data-import-row="${i}" checked /></td><td>${escapeHtml(row[index.date] ?? "")}</td><td>${escapeHtml(vendor)}</td><td>${Number.isFinite(amount) ? `${amount >= 0 ? "+" : "−"}${money.format(Math.abs(amount))}` : "Invalid amount"}</td><td><select data-import-type="${i}">${["expense", "refund", "income", "transfer", "adjustment"].map((value) => `<option ${value === type ? "selected" : ""}>${value}</option>`).join("")}</select></td><td><select data-import-category="${i}" required><option value="">Choose category</option>${optionList(matching, selectedCategory)}</select></td><td><input data-import-description="${i}" maxlength="500" placeholder="Optional" /></td></tr>`;
+        return `<tr class="${moneyCell.error ? "import-row-error" : ""}"><td><input type="checkbox" data-import-row="${i}" ${moneyCell.error ? "disabled" : "checked"} /></td><td>${escapeHtml(row[index.date] ?? "")}</td><td>${escapeHtml(vendor)}</td><td>${Number.isFinite(amount) ? `${amount >= 0 ? "+" : "−"}${money.format(Math.abs(amount))}` : `<span class="field-error">${escapeHtml(moneyCell.error)}</span>`}</td><td><select data-import-type="${i}" ${moneyCell.error ? "disabled" : ""}>${["expense", "refund", "income", "transfer", "adjustment"].map((value) => `<option ${value === type ? "selected" : ""}>${value}</option>`).join("")}</select></td><td><select data-import-category="${i}" required ${moneyCell.error ? "disabled" : ""}><option value="">Choose category</option>${optionList(matching, selectedCategory)}</select></td><td><input data-import-description="${i}" maxlength="500" placeholder="Optional" ${moneyCell.error ? "disabled" : ""}/></td></tr>`;
       })
       .join("")}</tbody></table>`;
   $("#import-submit").disabled =
@@ -1234,7 +1285,7 @@ function renderImportPreview() {
     index.vendor < 0 ||
     (index.amount < 0 && index.debit < 0 && index.credit < 0);
   $("#import-status").textContent =
-    `Previewing ${rows.length} rows. Neo Amount files and headerless CIBC Date/Description/Debit/Credit files are supported. Confirm the suggested type and category; descriptions may stay blank.`;
+    `Previewing ${rows.length} rows. A mapped Amount column keeps its bank-provided sign. A mapped Debit/Expense/Withdrawal column is always money out; a Credit/Income/Deposit column is always money in. Descriptions do not decide direction.`;
 }
 async function loadImportSuggestions() {
   if (!state.csv) return;
@@ -1452,6 +1503,7 @@ document.addEventListener("click", (event) => {
     );
     renderNetWorthAccountControls();
     renderAccountNetWorthChart();
+    renderNetWorthRelatedLists();
     return;
   }
   if (target.dataset.dialog) {
@@ -1475,6 +1527,16 @@ document.addEventListener("click", (event) => {
       $("#projection-rule-title").textContent = "Add Projection Rule";
       updateProjectionRuleFields();
     }
+    if (target.dataset.dialog === "balance-dialog") {
+      const form = $("#balance-form");
+      form.reset();
+      form.elements.id.value = "";
+      form.elements.snapshotDate.value = today();
+      $("#balance-title").textContent = "Record balance";
+      const selected = [...state.selectedNetWorthAccounts];
+      if (selected.length === 1) form.elements.accountId.value = selected[0];
+    }
+    if (target.closest("summary")) event.preventDefault();
     dialog.showModal();
   }
   if (target.hasAttribute("data-close")) target.closest("dialog").close();
@@ -1526,6 +1588,22 @@ document.addEventListener("click", (event) => {
       form.elements.toAccountId.value = rule.toAccountId ?? "";
       $("#projection-rule-title").textContent = "Edit Projection Rule";
       $("#projection-rule-dialog").showModal();
+    }
+    return;
+  }
+  if (target.classList.contains("edit-balance")) {
+    const item = state.balanceSnapshots.find(
+      (row) => row.id === target.dataset.id,
+    );
+    if (item) {
+      const form = $("#balance-form");
+      form.elements.id.value = item.id;
+      form.elements.accountId.value = item.accountId;
+      form.elements.snapshotDate.value = item.snapshotDate;
+      form.elements.balance.value = dollars(item.balanceMinor);
+      form.elements.note.value = item.note ?? "";
+      $("#balance-title").textContent = "Edit balance";
+      $("#balance-dialog").showModal();
     }
     return;
   }
@@ -1609,6 +1687,7 @@ document.addEventListener("change", (event) => {
         accountToggle.dataset.networthAccount,
       );
     renderAccountNetWorthChart();
+    renderNetWorthRelatedLists();
     return;
   }
   const assignment = event.target.closest(".master-category-assignment");
@@ -1716,17 +1795,21 @@ $("#balance-form").addEventListener("submit", (event) => {
   const formElement = event.currentTarget;
   void run(async () => {
     const form = new FormData(formElement);
-    await api("/api/v1/balance-snapshots", {
-      method: "POST",
-      body: JSON.stringify({
-        accountId: form.get("accountId"),
-        snapshotDate: form.get("snapshotDate"),
-        balanceMinor: cents(form.get("balance")),
-        note: form.get("note"),
-      }),
-    });
+    const id = form.get("id");
+    await api(
+      id ? `/api/v1/balance-snapshots/${id}` : "/api/v1/balance-snapshots",
+      {
+        method: id ? "PUT" : "POST",
+        body: JSON.stringify({
+          accountId: form.get("accountId"),
+          snapshotDate: form.get("snapshotDate"),
+          balanceMinor: cents(form.get("balance")),
+          note: form.get("note"),
+        }),
+      },
+    );
     $("#balance-dialog").close();
-    notify("Balance recorded.");
+    notify(id ? "Balance updated." : "Balance recorded.");
     await loadNetWorth();
   });
 });
@@ -1880,8 +1963,20 @@ $("#import-form").file.addEventListener("change", async (event) => {
       "payee",
     ]) +
     mappingSelect("Amount", headers, ["amount"]) +
-    mappingSelect("Debit", headers, ["debit", "withdrawal"]) +
-    mappingSelect("Credit", headers, ["credit", "deposit"]);
+    mappingSelect("Debit", headers, [
+      "debit",
+      "expense",
+      "withdrawal",
+      "money out",
+      "paid out",
+    ]) +
+    mappingSelect("Credit", headers, [
+      "credit",
+      "income",
+      "deposit",
+      "money in",
+      "paid in",
+    ]);
   $("#mapping").hidden = false;
   $$("select", $("#mapping")).forEach((select) =>
     select.addEventListener(
@@ -1918,9 +2013,10 @@ $("#import-form").addEventListener("submit", (event) => {
       );
     const occurrenceCounts = new Map(),
       occurrenceNumbers = sourceRows.map((row, originalIndex) => {
-        const rawAmount = importRowAmount(row, importIndex),
+        const moneyCell = importRowMoney(row, importIndex),
+          rawAmount = moneyCell.amount,
           transactionType = $(`[data-import-type="${originalIndex}"]`).value,
-          direction = transactionDirectionForType(transactionType),
+          direction = moneyCell.direction,
           postedDate =
             importIndex.postedDate >= 0 ? row[importIndex.postedDate] : "",
           occurrenceKey = JSON.stringify([
@@ -1938,9 +2034,10 @@ $("#import-form").addEventListener("submit", (event) => {
       });
     const rows = sourceRows.flatMap((row, originalIndex) => {
       if (!selected.has(originalIndex)) return [];
-      const rawAmount = importRowAmount(row, importIndex),
+      const moneyCell = importRowMoney(row, importIndex),
+        rawAmount = moneyCell.amount,
         transactionType = $(`[data-import-type="${originalIndex}"]`).value,
-        direction = transactionDirectionForType(transactionType),
+        direction = moneyCell.direction,
         transactionDate = row[key("date")],
         postedDate =
           importIndex.postedDate >= 0 ? row[importIndex.postedDate] : "",

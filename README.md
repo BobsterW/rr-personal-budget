@@ -1,6 +1,19 @@
-# R&R Budget v7.9
+# R&R Budget v7.10
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.10 changes
+
+- Treats mapped CIBC-style Debit/Expense/Withdrawal columns as money out and
+  Credit/Income/Deposit columns as money in. Transaction descriptions no longer
+  determine the balance direction, while single signed Amount columns continue
+  to preserve their bank-provided sign.
+- Shows row-specific import errors when both split amount columns are populated,
+  neither is populated, or the selected value is not numeric.
+- Filters Projection Rules and Account Balances using the account selection above
+  the net-worth graph.
+- Converts Projection Rules and Account Balances into collapsible cards, moves
+  Record balance into its card header, and adds editing for recorded balances.
 
 ## V7.9 changes
 
