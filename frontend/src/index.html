@@ -417,9 +417,6 @@
             /></label>
             <label>End date<input id="networth-end-date" type="date" /></label>
             <button id="apply-networth-range">Apply</button>
-            <button class="secondary" data-dialog="balance-dialog">
-              Record balance
-            </button>
           </div>
         </div>
         <div class="metric-grid">
@@ -478,9 +475,9 @@
             Transfers without a known signed balance effect are excluded.
           </p>
         </section>
-        <section class="panel projection-assumptions-panel">
-          <div class="panel-heading">
-            <div>
+        <details class="panel networth-disclosure projection-assumptions-panel">
+          <summary class="panel-heading">
+            <div class="disclosure-heading">
               <h2>Projection Rules</h2>
               <p>
                 Route future income, expenses, transfers, and debt payments
@@ -490,31 +487,41 @@
             <button data-dialog="projection-rule-dialog">
               Add projection rule
             </button>
+          </summary>
+          <div class="networth-disclosure-content">
+            <div id="projection-rules-list" class="projection-rules-list"></div>
+            <p class="fine-print">
+              The selected graph end date controls the projection length.
+              Transfers change account composition without changing total net
+              worth. This is a planning estimate, not financial advice.
+            </p>
           </div>
-          <div id="projection-rules-list" class="projection-rules-list"></div>
-          <p class="fine-print">
-            The selected graph end date controls the projection length.
-            Transfers change account composition without changing total net
-            worth. This is a planning estimate, not financial advice.
-          </p>
-        </section>
-        <section class="panel">
-          <h2>Account Balance</h2>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Account</th>
-                  <th>Type</th>
-                  <th class="money">Balance</th>
-                  <th><span class="sr-only">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody id="balances-body"></tbody>
-            </table>
+        </details>
+        <details class="panel networth-disclosure">
+          <summary class="panel-heading">
+            <div class="disclosure-heading">
+              <h2>Account Balances</h2>
+              <p>Recorded balance history for the selected accounts.</p>
+            </div>
+            <button data-dialog="balance-dialog">Record balance</button>
+          </summary>
+          <div class="networth-disclosure-content">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Account</th>
+                    <th>Type</th>
+                    <th class="money">Balance</th>
+                    <th><span class="sr-only">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody id="balances-body"></tbody>
+              </table>
+            </div>
           </div>
-        </section>
+        </details>
       </section>
       <section id="settings" class="view" hidden>
         <div class="hero">
@@ -655,8 +662,9 @@
     </dialog>
     <dialog id="balance-dialog">
       <form id="balance-form">
+        <input type="hidden" name="id" />
         <div class="dialog-heading">
-          <h2>Record balance</h2>
+          <h2 id="balance-title">Record balance</h2>
           <button
             type="button"
             class="icon secondary"
@@ -872,6 +880,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.9.0"></script>
+    <script type="module" src="app.js?v=7.10.0"></script>
   </body>
 </html>

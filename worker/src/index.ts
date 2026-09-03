@@ -1102,6 +1102,61 @@ async function route(request: Request, env: Env): Promise<Response> {
   const balanceSnapshotMatch = path.match(
     /^\/api\/v1\/balance-snapshots\/([^/]+)$/,
   );
+  if (balanceSnapshotMatch && method === "PUT") {
+    const body = assertObject(await readJson(request));
+    const accountId = requireString(body, "accountId"),
+      snapshotDate = requireString(body, "snapshotDate", 10);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(snapshotDate) ||
+      !Number.isSafeInteger(body.balanceMinor)
+    )
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "A valid date and integer balanceMinor are required.",
+      );
+    const account = await env.DB.prepare(
+      "SELECT id FROM accounts WHERE id=? AND user_id=? AND active=1",
+    )
+      .bind(accountId, user.id)
+      .first();
+    if (!account)
+      throw new ApiError(
+        422,
+        "INVALID_ACCOUNT",
+        "The selected account does not exist or is archived.",
+      );
+    try {
+      const result = await env.DB.prepare(
+        "UPDATE balance_snapshots SET account_id=?,snapshot_date=?,balance_minor=?,note=?,updated_at=? WHERE id=? AND user_id=?",
+      )
+        .bind(
+          accountId,
+          snapshotDate,
+          body.balanceMinor,
+          typeof body.note === "string" ? body.note.slice(0, 500) : "",
+          new Date().toISOString(),
+          balanceSnapshotMatch[1],
+          user.id,
+        )
+        .run();
+      if (!result.meta.changes)
+        throw new ApiError(404, "NOT_FOUND", "Account balance not found.");
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(
+        409,
+        "BALANCE_DATE_CONFLICT",
+        "That account already has a balance recorded for this date.",
+      );
+    }
+    const updated = await env.DB.prepare(
+      "SELECT s.*,a.name account_name,a.account_type FROM balance_snapshots s JOIN accounts a ON a.id=s.account_id AND a.user_id=s.user_id WHERE s.id=? AND s.user_id=?",
+    )
+      .bind(balanceSnapshotMatch[1], user.id)
+      .first();
+    return json({ data: toCamel(updated as Record<string, unknown>) });
+  }
   if (balanceSnapshotMatch && method === "DELETE") {
     const result = await env.DB.prepare(
       "DELETE FROM balance_snapshots WHERE id=? AND user_id=?",

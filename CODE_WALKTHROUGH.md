@@ -1,4 +1,4 @@
-# V7.9 code walkthrough
+# V7.10 code walkthrough
 
 This guide explains how the application works from the browser down to Cloudflare D1. Read it beside the source files. The inline comments identify important implementation boundaries; this guide explains how those boundaries connect.
 

@@ -1214,6 +1214,44 @@ td {
   gap: 10px;
   margin-top: 18px;
 }
+.networth-disclosure {
+  padding: 0;
+  overflow: hidden;
+}
+.networth-disclosure summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 22px;
+}
+.networth-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.networth-disclosure summary::after {
+  content: "+";
+  color: var(--green);
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+.networth-disclosure[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+.networth-disclosure[open] summary::after {
+  content: "−";
+}
+.networth-disclosure-content {
+  padding: 0 22px 22px;
+}
+.disclosure-heading {
+  flex: 1;
+}
+.import-row-error {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.field-error {
+  color: var(--danger);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
 .projection-rule {
   display: flex;
   justify-content: space-between;
