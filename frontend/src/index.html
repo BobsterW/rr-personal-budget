@@ -440,38 +440,8 @@
               <p class="eyebrow">History and forecast</p>
               <h2>Actual & projected net worth</h2>
             </div>
-            <div
-              class="chart-mode-toggle"
-              role="group"
-              aria-label="Net worth chart view"
-            >
-              <button
-                class="networth-mode"
-                data-networth-mode="liquidity"
-                aria-pressed="true"
-              >
-                Fixed / liquid
-              </button>
-              <button
-                class="networth-mode secondary"
-                data-networth-mode="accounts"
-                aria-pressed="false"
-              >
-                By account
-              </button>
-            </div>
           </div>
-          <div id="networth-liquidity-legend" class="chart-legend">
-            <span class="fixed-key">Fixed net worth</span
-            ><span class="liquid-key"
-              >Liquid net worth stacked above fixed</span
-            >
-          </div>
-          <div
-            id="networth-account-controls"
-            class="networth-account-controls"
-            hidden
-          >
+          <div id="networth-account-controls" class="networth-account-controls">
             <div class="account-filter-actions">
               <button class="secondary compact" data-account-selection="all">
                 Select all
@@ -484,6 +454,12 @@
                 data-account-selection="liabilities"
               >
                 Liabilities
+              </button>
+              <button class="secondary compact" data-account-selection="fixed">
+                Fixed
+              </button>
+              <button class="secondary compact" data-account-selection="liquid">
+                Liquid
               </button>
               <button class="secondary compact" data-account-selection="none">
                 Clear
@@ -895,7 +871,7 @@
         </div>
       </form>
     </dialog>
-    <script src="config.js?v=7.8.0"></script>
-    <script type="module" src="app.js?v=7.8.0"></script>
+    <script src="config.js?v=7.9.0"></script>
+    <script type="module" src="app.js?v=7.9.0"></script>
   </body>
 </html>

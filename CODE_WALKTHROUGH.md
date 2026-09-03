@@ -1,6 +1,13 @@
-# V7.8 code walkthrough
+# V7.9 code walkthrough
 
 This guide explains how the application works from the browser down to Cloudflare D1. Read it beside the source files. The inline comments identify important implementation boundaries; this guide explains how those boundaries connect.
+
+V7.9 adds `worker/src/importFingerprint.ts`, keeping CSV identity rules separate
+from HTTP routing. A bank transaction ID is the strongest identity. Without
+one, the fallback preserves source-row detail and uses an occurrence number so
+two legitimate identical charges in one export remain distinct. The net-worth
+UI always renders account layers; Assets, Liabilities, Fixed, and Liquid are
+selection shortcuts over the same account checkboxes.
 
 ## 1. Request flow
 

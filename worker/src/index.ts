@@ -18,6 +18,7 @@ import {
   validatePassword,
 } from "./auth";
 import { ApiError, errorResponse, json, readJson } from "./http";
+import { importFingerprintSource } from "./importFingerprint";
 import { BudgetRepository } from "./repository";
 import { buildNetWorthTimeline } from "./timeline";
 import type {
@@ -1286,14 +1287,38 @@ async function route(request: Request, env: Env): Promise<Response> {
         });
         continue;
       }
-      const normalized = [
-        validation.data.transactionDate,
-        validation.data.accountId,
-        validation.data.vendorName.toLowerCase(),
-        validation.data.amountMinor,
-        validation.data.transactionType,
-        validation.data.transactionDirection,
-      ].join("|");
+      const sourceRow =
+          typeof candidate.sourceRow === "string"
+            ? candidate.sourceRow.slice(0, 10_000)
+            : JSON.stringify(raw),
+        sourceTransactionId =
+          typeof candidate.sourceTransactionId === "string"
+            ? candidate.sourceTransactionId.slice(0, 300)
+            : undefined,
+        postedDate =
+          typeof candidate.postedDate === "string"
+            ? candidate.postedDate.slice(0, 10)
+            : undefined,
+        occurrenceNumber =
+          Number.isSafeInteger(candidate.occurrenceNumber) &&
+          Number(candidate.occurrenceNumber) > 0
+            ? Number(candidate.occurrenceNumber)
+            : index + 1,
+        normalized = importFingerprintSource({
+          accountId,
+          transactionDate: validation.data.transactionDate,
+          postedDate,
+          sourceTransactionId,
+          sourceRow,
+          vendorName:
+            typeof candidate.vendorName === "string"
+              ? candidate.vendorName
+              : validation.data.vendorName,
+          amountMinor: validation.data.amountMinor,
+          transactionType: validation.data.transactionType,
+          transactionDirection: validation.data.transactionDirection,
+          occurrenceNumber,
+        });
       validation.data.importFingerprint = await sha256(normalized);
       const id = crypto.randomUUID();
       statements.push(
