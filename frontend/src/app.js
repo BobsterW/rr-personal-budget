@@ -29,11 +29,9 @@ const state = {
   selectedTransactionIds: new Set(),
   lastSelectedTransactionIndex: null,
   netWorthTimeline: null,
-  netWorthMode: "liquidity",
   selectedNetWorthAccounts: new Set(),
   netWorthSelectionInitialized: false,
   selectedNetWorthSeries: "networth",
-  netWorthLiquidityMarkup: "",
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -877,10 +875,9 @@ async function loadNetWorth() {
     .join("");
   $("#projection-chart").innerHTML =
     `<div class="chart-scroll"><svg viewBox="0 0 1200 470" role="img" aria-label="Monthly historical and projected fixed and liquid net worth">${grid}${monthMarks}<line class="zero-line" x1="${plot.left}" y1="${y(0)}" x2="${plot.right}" y2="${y(0)}"/><path class="fixed-area" d="${line(points, "fixedNetWorthMinor")} L${plot.right},${y(0)} L${plot.left},${y(0)} Z"/><path class="liquid-area" d="${area}"/><path class="fixed-line actual-line" d="${line(actual, "fixedNetWorthMinor")}"/><path class="total-line actual-line" d="${line(actual, "netWorthMinor")}"/><path class="fixed-line projected-line" d="${line(projected, "fixedNetWorthMinor")}"/><path class="total-line projected-line" d="${line(projected, "netWorthMinor")}"/>${todayX === null ? "" : `<line class="today-line" x1="${todayX}" y1="${plot.top}" x2="${todayX}" y2="${plot.bottom}"/><text class="today-label" x="${Math.min(plot.right - 45, todayX + 8)}" y="${plot.top + 15}">Today</text>`}</svg></div><div class="chart-values"><span>Start: fixed ${money.format(dollars(fixed[0]))}, liquid ${money.format(dollars(points[0].liquidNetWorthMinor))}</span><span>End: fixed ${money.format(dollars(fixed.at(-1)))}, liquid ${money.format(dollars(points.at(-1).liquidNetWorthMinor))}</span></div>`;
-  state.netWorthLiquidityMarkup = $("#projection-chart").innerHTML;
   initializeNetWorthAccountSelection();
   renderNetWorthAccountControls();
-  setNetWorthMode(state.netWorthMode);
+  renderAccountNetWorthChart();
 }
 
 function timelineAccounts() {
@@ -915,7 +912,7 @@ function renderNetWorthAccountControls() {
     .map((account) => {
       const checked = state.selectedNetWorthAccounts.has(account.id);
       const colorIndex = chartColors.indexOf(accountColor(account.id));
-      return `<label class="account-toggle account-color-${colorIndex} ${accountIsLiability(account) ? "liability-account" : "asset-account"}"><input type="checkbox" data-networth-account="${escapeHtml(account.id)}" ${checked ? "checked" : ""}/><i></i><span>${escapeHtml(account.name)} <small>${accountIsLiability(account) ? "liability" : "asset"}</small></span></label>`;
+      return `<label class="account-toggle account-color-${colorIndex} ${accountIsLiability(account) ? "liability-account" : "asset-account"}"><input type="checkbox" data-networth-account="${escapeHtml(account.id)}" ${checked ? "checked" : ""}/><i></i><span>${escapeHtml(account.name)} <small>${accountIsLiability(account) ? "liability" : "asset"} · ${escapeHtml(account.liquidityClass)}</small></span></label>`;
     })
     .join("");
 }
@@ -1089,20 +1086,6 @@ function renderAccountNetWorthChart() {
     `<div class="chart-scroll"><svg viewBox="0 0 1200 470" role="img" aria-label="Diverging account composition with assets above zero and liabilities below zero"><defs>${patternDefinitions}</defs>${grid}${areas}<line class="zero-line" x1="${plot.left}" y1="${y(0)}" x2="${plot.right}" y2="${y(0)}"/><text class="account-side-label" x="${plot.left + 8}" y="${Math.max(plot.top + 16, y(0) - 10)}">Assets</text><text class="account-side-label" x="${plot.left + 8}" y="${Math.min(plot.bottom - 8, y(0) + 20)}">Liabilities</text><path class="account-total-line ${state.selectedNetWorthSeries === "networth" ? "series-selected" : "series-muted"}" data-networth-series="networth" tabindex="0" d="${totalLine}"/><path class="account-total-hit" data-networth-series="networth" d="${totalLine}"/>${valueLabels}${todayLine}${months}</svg></div><div class="chart-values"><span>${accounts.length} account${accounts.length === 1 ? "" : "s"} selected · each colour is one account</span><span>Selected net worth: ${money.format(dollars(totals.at(-1)))}</span></div>`;
   showNetWorthAccountDetail(accounts[0].id, points.length - 1);
 }
-function setNetWorthMode(mode) {
-  state.netWorthMode = mode;
-  $$(".networth-mode").forEach((button) => {
-    const active = button.dataset.networthMode === mode;
-    button.classList.toggle("secondary", !active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  $("#networth-liquidity-legend").hidden = mode !== "liquidity";
-  $("#networth-account-controls").hidden = mode !== "accounts";
-  $("#networth-account-detail").hidden = mode !== "accounts";
-  if (mode === "accounts") renderAccountNetWorthChart();
-  else $("#projection-chart").innerHTML = state.netWorthLiquidityMarkup;
-}
-
 async function showView() {
   const id = window.location.hash.slice(1) || "transactions";
   $$(".view").forEach((view) => {
@@ -1162,9 +1145,16 @@ function normalizeCsvRows(rows) {
 }
 function importMapping(headers) {
   const keys = ["date", "vendor", "amount", "debit", "credit"];
-  return Object.fromEntries(
-    keys.map((key) => [key, headers.indexOf($(`[name="map-${key}"]`)?.value)]),
-  );
+  return {
+    ...Object.fromEntries(
+      keys.map((key) => [
+        key,
+        headers.indexOf($(`[name="map-${key}"]`)?.value),
+      ]),
+    ),
+    postedDate: headers.indexOf($('[name="map-posted-date"]')?.value),
+    transactionId: headers.indexOf($('[name="map-transaction-id"]')?.value),
+  };
 }
 function importRowAmount(row, index) {
   if (index.amount >= 0 && row[index.amount] !== "")
@@ -1373,10 +1363,6 @@ document.addEventListener("click", (event) => {
     setMobileNavigation(false);
     return;
   }
-  if (target.dataset.networthMode) {
-    setNetWorthMode(target.dataset.networthMode);
-    return;
-  }
   if (target.dataset.activityMode) {
     setActivityMode(target.dataset.activityMode);
     return;
@@ -1457,9 +1443,10 @@ document.addEventListener("click", (event) => {
           const liability = ["liability", "credit_card"].includes(
             account.accountType,
           );
-          return target.dataset.accountSelection === "liabilities"
-            ? liability
-            : !liability;
+          if (target.dataset.accountSelection === "liabilities")
+            return liability;
+          if (target.dataset.accountSelection === "assets") return !liability;
+          return account.liquidityClass === target.dataset.accountSelection;
         })
         .map((account) => account.id),
     );
@@ -1878,7 +1865,14 @@ $("#import-form").file.addEventListener("change", async (event) => {
   state.categorySuggestions = [];
   const headers = rows[0];
   $("#mapping").innerHTML =
-    mappingSelect("Date", headers, ["date"]) +
+    mappingSelect("Date", headers, ["transaction date", "date"]) +
+    mappingSelect("Posted Date", headers, ["posted date", "posting date"]) +
+    mappingSelect("Transaction ID", headers, [
+      "transaction id",
+      "transaction number",
+      "reference number",
+      "confirmation number",
+    ]) +
     mappingSelect("Vendor", headers, [
       "description",
       "merchant",
@@ -1922,15 +1916,44 @@ $("#import-form").addEventListener("submit", (event) => {
       throw new Error(
         `Choose a category for included row ${missingCategory + 1}.`,
       );
-    const rows = sourceRows
-      .filter((_, index) => selected.has(index))
-      .map((row, filteredIndex) => {
-        const originalIndex = [...selected][filteredIndex],
-          rawAmount = importRowAmount(row, importIndex),
+    const occurrenceCounts = new Map(),
+      occurrenceNumbers = sourceRows.map((row, originalIndex) => {
+        const rawAmount = importRowAmount(row, importIndex),
           transactionType = $(`[data-import-type="${originalIndex}"]`).value,
-          direction = transactionDirectionForType(transactionType);
-        return {
-          transactionDate: row[key("date")],
+          direction = transactionDirectionForType(transactionType),
+          postedDate =
+            importIndex.postedDate >= 0 ? row[importIndex.postedDate] : "",
+          occurrenceKey = JSON.stringify([
+            postedDate,
+            row[key("date")],
+            row[key("vendor")],
+            cents(Math.abs(rawAmount)),
+            transactionType,
+            direction,
+            JSON.stringify(row),
+          ]),
+          occurrenceNumber = (occurrenceCounts.get(occurrenceKey) ?? 0) + 1;
+        occurrenceCounts.set(occurrenceKey, occurrenceNumber);
+        return occurrenceNumber;
+      });
+    const rows = sourceRows.flatMap((row, originalIndex) => {
+      if (!selected.has(originalIndex)) return [];
+      const rawAmount = importRowAmount(row, importIndex),
+        transactionType = $(`[data-import-type="${originalIndex}"]`).value,
+        direction = transactionDirectionForType(transactionType),
+        transactionDate = row[key("date")],
+        postedDate =
+          importIndex.postedDate >= 0 ? row[importIndex.postedDate] : "",
+        sourceTransactionId =
+          importIndex.transactionId >= 0 ? row[importIndex.transactionId] : "",
+        sourceRow = JSON.stringify(row);
+      return [
+        {
+          transactionDate,
+          postedDate,
+          sourceTransactionId,
+          sourceRow,
+          occurrenceNumber: occurrenceNumbers[originalIndex],
           vendorName: row[key("vendor")],
           description: $(
             `[data-import-description="${originalIndex}"]`,
@@ -1943,8 +1966,9 @@ $("#import-form").addEventListener("submit", (event) => {
           transactionType,
           transactionDirection: direction,
           currency: "CAD",
-        };
-      });
+        },
+      ];
+    });
     const totals = { accepted: 0, duplicates: 0, rejected: 0, errors: [] };
     for (let index = 0; index < rows.length; index += 40) {
       const result = await api("/api/v1/imports", {

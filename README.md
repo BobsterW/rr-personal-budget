@@ -1,6 +1,19 @@
-# R&R Budget v7.8
+# R&R Budget v7.9
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.9 changes
+
+- Replaces the overly broad CSV duplicate fingerprint with a source-aware v2
+  fingerprint. Bank transaction IDs take priority when available. Otherwise,
+  the account, transaction and posted dates, exact parsed source row, exact
+  vendor, amount, transaction type/direction, and deterministic occurrence
+  number identify the transaction.
+- Allows identical legitimate transactions within one statement by assigning
+  each repeated source row its own stable occurrence number.
+- Adds optional Posted Date and Transaction ID mappings to CSV imports.
+- Uses the colored by-account net-worth chart as the only graph view. Fixed and
+  Liquid are now filters beside Assets and Liabilities.
 
 ## V7.8 changes
 
@@ -110,7 +123,7 @@ A private, multi-user budget and net-worth application inspired by `R&R Expenses
 - `database/`: forward-only Cloudflare D1 migrations and invented development seeds
 - `.github/workflows/`: pull-request checks and main-branch production deployment
 
-The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.8 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
+The browser calls the same-origin Pages API relay with credentialed `fetch` requests. The relay forwards to the dedicated Worker, and only the Worker can access D1. V7.9 retains bcrypt password authentication, server-side sessions, ownership-aware foreign keys, API-level tenant scoping, visible-password controls, and corrected asynchronous form handling. This directory preserves all earlier versions separately.
 
 For a detailed, file-by-file explanation, read [`CODE_WALKTHROUGH.md`](CODE_WALKTHROUGH.md).
 
