@@ -80,7 +80,7 @@ function cors(request: Request, env: Env): Record<string, string> {
     ? {
         "access-control-allow-origin": origin,
         "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-        "access-control-allow-headers": "content-type",
+        "access-control-allow-headers": "content-type,x-page-session",
         "access-control-allow-credentials": "true",
         vary: "Origin",
       }
@@ -281,9 +281,18 @@ async function route(request: Request, env: Env): Promise<Response> {
         );
       throw error;
     }
-    return json({ data: { id: userId, username: input.username } }, 201, {
-      "set-cookie": await createSession(userId, env.DB, request),
-    });
+    const session = await createSession(userId, env.DB, request, false);
+    return json(
+      {
+        data: {
+          id: userId,
+          username: input.username,
+          pageSessionKey: session.pageSessionKey,
+        },
+      },
+      201,
+      { "set-cookie": session.cookie },
+    );
   }
 
   // Missing usernames and wrong passwords intentionally share one response.
@@ -334,9 +343,23 @@ async function route(request: Request, env: Env): Promise<Response> {
         "INVALID_CREDENTIALS",
         "Incorrect username or password.",
       );
-    return json({ data: { id: user.id, username: user.username } }, 200, {
-      "set-cookie": await createSession(user.id, env.DB, request),
-    });
+    const session = await createSession(
+      user.id,
+      env.DB,
+      request,
+      input.keepSignedIn,
+    );
+    return json(
+      {
+        data: {
+          id: user.id,
+          username: user.username,
+          pageSessionKey: session.pageSessionKey,
+        },
+      },
+      200,
+      { "set-cookie": session.cookie },
+    );
   }
 
   if (path === "/api/v1/auth/logout" && method === "POST") {

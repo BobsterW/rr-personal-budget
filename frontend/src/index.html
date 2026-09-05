@@ -8,7 +8,7 @@
       content="Private transaction, monthly spending, and net-worth tracker."
     />
     <title>R&R Budget</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=7.11.0" />
   </head>
   <body>
     <!-- Authentication is the only visible section until /auth/me confirms a session. -->
@@ -45,6 +45,10 @@
               Eye
             </button>
           </div>
+          <label class="keep-signed-in">
+            <input name="keepSignedIn" type="checkbox" />
+            <span>Keep me signed in</span>
+          </label>
           <button type="submit">Sign in</button>
         </form>
         <form id="register-form" class="auth-form" hidden>
@@ -880,6 +884,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.10.0"></script>
+    <script type="module" src="app.js?v=7.11.0"></script>
   </body>
 </html>

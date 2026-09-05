@@ -13,12 +13,22 @@ export interface AuthUser {
 
 const SESSION_COOKIE = "rr_session";
 const SESSION_DAYS = 14;
+const IDLE_MINUTES = 10;
+const PAGE_SESSION_HEADER = "x-page-session";
 const encoder = new TextEncoder();
 
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function timingSafeTextEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1)
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
 }
 
 export async function digest(value: string): Promise<string> {
@@ -104,15 +114,65 @@ export async function requireUser(
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token)
     throw new ApiError(401, "AUTHENTICATION_REQUIRED", "Please sign in.");
+  const tokenHash = await digest(token);
   const row = await db
     .prepare(
-      "SELECT u.id,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.active=1",
+      "SELECT u.id,u.username,s.persistent,s.page_key_hash,s.last_used_at,s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND u.active=1",
     )
-    .bind(await digest(token), new Date().toISOString())
-    .first<AuthUser>();
-  if (!row)
-    throw new ApiError(401, "AUTHENTICATION_REQUIRED", "Please sign in.");
-  return row;
+    .bind(tokenHash)
+    .first<
+      AuthUser & {
+        persistent: number;
+        page_key_hash: string | null;
+        last_used_at: string;
+        expires_at: string;
+      }
+    >();
+  const now = new Date();
+  if (!row || row.expires_at <= now.toISOString()) {
+    if (row)
+      await db
+        .prepare("DELETE FROM sessions WHERE token_hash=?")
+        .bind(tokenHash)
+        .run();
+    throw new ApiError(
+      401,
+      "SESSION_EXPIRED",
+      "Your session expired. Please sign in again.",
+    );
+  }
+  if (!row.persistent) {
+    const idleCutoff = new Date(
+      now.getTime() - IDLE_MINUTES * 60_000,
+    ).toISOString();
+    const pageKey = request.headers.get(PAGE_SESSION_HEADER);
+    if (row.last_used_at <= idleCutoff) {
+      await db
+        .prepare("DELETE FROM sessions WHERE token_hash=?")
+        .bind(tokenHash)
+        .run();
+      throw new ApiError(
+        401,
+        "SESSION_EXPIRED",
+        "Your session expired after 10 minutes of inactivity. Please sign in again.",
+      );
+    }
+    if (
+      !pageKey ||
+      !row.page_key_hash ||
+      !timingSafeTextEqual(await digest(pageKey), row.page_key_hash)
+    )
+      throw new ApiError(
+        401,
+        "PAGE_SESSION_ENDED",
+        "This page session ended. Please sign in again.",
+      );
+    await db
+      .prepare("UPDATE sessions SET last_used_at=? WHERE token_hash=?")
+      .bind(now.toISOString(), tokenHash)
+      .run();
+  }
+  return { id: row.id, username: row.username };
 }
 
 // Persist only a token digest and return the raw secret in a protected cookie.
@@ -120,14 +180,16 @@ export async function createSession(
   userId: string,
   db: D1Database,
   request: Request,
-): Promise<string> {
+  persistent = false,
+): Promise<{ cookie: string; pageSessionKey: string | null }> {
   const token = randomToken();
+  const pageSessionKey = persistent ? null : randomToken();
   const now = new Date();
   const expires = new Date(now);
   expires.setUTCDate(expires.getUTCDate() + SESSION_DAYS);
   await db
     .prepare(
-      "INSERT INTO sessions (id,user_id,token_hash,created_at,last_used_at,expires_at) VALUES (?,?,?,?,?,?)",
+      "INSERT INTO sessions (id,user_id,token_hash,created_at,last_used_at,expires_at,persistent,page_key_hash) VALUES (?,?,?,?,?,?,?,?)",
     )
     .bind(
       crypto.randomUUID(),
@@ -136,6 +198,8 @@ export async function createSession(
       now.toISOString(),
       now.toISOString(),
       expires.toISOString(),
+      persistent ? 1 : 0,
+      pageSessionKey ? await digest(pageSessionKey) : null,
     )
     .run();
   const requestUrl = new URL(request.url);
@@ -144,7 +208,11 @@ export async function createSession(
     ? new URL(origin).hostname !== requestUrl.hostname
     : false;
   const secure = requestUrl.protocol === "https:" ? "; Secure" : "";
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly${secure}; SameSite=${crossSite ? "None" : "Strict"}; Max-Age=${SESSION_DAYS * 86400}`;
+  const longevity = persistent ? `; Max-Age=${SESSION_DAYS * 86400}` : "";
+  return {
+    cookie: `${SESSION_COOKIE}=${token}; Path=/; HttpOnly${secure}; SameSite=${crossSite ? "None" : "Strict"}${longevity}`,
+    pageSessionKey,
+  };
 }
 
 export async function destroySession(
@@ -166,7 +234,7 @@ export function clearSessionCookie(request: Request): string {
 
 export async function credentials(
   request: Request,
-): Promise<{ username: string; password: string }> {
+): Promise<{ username: string; password: string; keepSignedIn: boolean }> {
   const body = await readJson(request);
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw new ApiError(400, "VALIDATION_ERROR", "A JSON object is required.");
@@ -174,5 +242,6 @@ export async function credentials(
   return {
     username: validateUsername(record.username),
     password: typeof record.password === "string" ? record.password : "",
+    keepSignedIn: record.keepSignedIn === true,
   };
 }

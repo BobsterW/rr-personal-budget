@@ -1,3 +1,5 @@
+import { inferDateOrder, normalizeImportDate } from "./date.js";
+
 /*
  * FRONTEND APPLICATION CONTROLLER
  * --------------------------------
@@ -58,6 +60,14 @@ const escapeHtml = (value) =>
       ],
   );
 const NAV_STORAGE_KEY = "rr-budget-nav-collapsed";
+const PAGE_SESSION_KEY = "rr-budget-page-session";
+const pageSessionKey = () => {
+  try {
+    return window.sessionStorage.getItem(PAGE_SESSION_KEY);
+  } catch {
+    return null;
+  }
+};
 const mobileNavigation = () => window.matchMedia("(max-width: 800px)").matches;
 function setMobileNavigation(open) {
   document.body.classList.toggle("nav-open", open);
@@ -87,6 +97,7 @@ async function api(path, options = {}) {
       credentials: "include",
       headers: {
         ...(options.body ? { "content-type": "application/json" } : {}),
+        ...(pageSessionKey() ? { "x-page-session": pageSessionKey() } : {}),
         ...options.headers,
       },
     });
@@ -118,6 +129,18 @@ async function api(path, options = {}) {
     );
     error.status = response.status;
     error.code = payload.error?.code;
+    if (
+      response.status === 401 &&
+      !path.includes("/auth/login") &&
+      !path.includes("/auth/register")
+    ) {
+      try {
+        window.sessionStorage.removeItem(PAGE_SESSION_KEY);
+      } catch {
+        // Private browsing can disable storage; the server still rejects access.
+      }
+      showAuth(error.message);
+    }
     throw error;
   }
   return payload;
@@ -1248,6 +1271,10 @@ function updateProjectionRuleFields() {
 function renderImportPreview() {
   const [headers, ...rows] = state.csv.rows;
   const index = importMapping(headers);
+  const selectedDateOrder = $('[name="date-format"]')?.value ?? "auto";
+  const inferredDateOrder = inferDateOrder(
+    rows.map((row) => (index.date >= 0 ? row[index.date] : "")),
+  );
   const outgoingAmounts = new Set(
     rows
       .map((row) => importRowAmount(row, index))
@@ -1259,6 +1286,21 @@ function renderImportPreview() {
       .map((row, i) => {
         const moneyCell = importRowMoney(row, index);
         const amount = moneyCell.amount;
+        const dateCell = normalizeImportDate(
+          index.date >= 0 ? row[index.date] : "",
+          selectedDateOrder,
+          inferredDateOrder,
+        );
+        const postedDateCell =
+          index.postedDate >= 0 && String(row[index.postedDate] ?? "").trim()
+            ? normalizeImportDate(
+                row[index.postedDate],
+                selectedDateOrder,
+                inferredDateOrder,
+              )
+            : { value: "", error: "" };
+        const rowError =
+          moneyCell.error || dateCell.error || postedDateCell.error;
         const vendor = row[index.vendor] ?? "";
         let type = inferImportType(amount, vendor);
         if (type === "income" && outgoingAmounts.has(Math.abs(amount)))
@@ -1277,7 +1319,10 @@ function renderImportPreview() {
         const selectedCategory = matching.some((item) => item.id === suggested)
           ? suggested
           : fallback;
-        return `<tr class="${moneyCell.error ? "import-row-error" : ""}"><td><input type="checkbox" data-import-row="${i}" ${moneyCell.error ? "disabled" : "checked"} /></td><td>${escapeHtml(row[index.date] ?? "")}</td><td>${escapeHtml(vendor)}</td><td>${Number.isFinite(amount) ? `${amount >= 0 ? "+" : "−"}${money.format(Math.abs(amount))}` : `<span class="field-error">${escapeHtml(moneyCell.error)}</span>`}</td><td><select data-import-type="${i}" ${moneyCell.error ? "disabled" : ""}>${["expense", "refund", "income", "transfer", "adjustment"].map((value) => `<option ${value === type ? "selected" : ""}>${value}</option>`).join("")}</select></td><td><select data-import-category="${i}" required ${moneyCell.error ? "disabled" : ""}><option value="">Choose category</option>${optionList(matching, selectedCategory)}</select></td><td><input data-import-description="${i}" maxlength="500" placeholder="Optional" ${moneyCell.error ? "disabled" : ""}/></td></tr>`;
+        const dateDisplay = dateCell.error
+          ? `<span class="field-error">${escapeHtml(dateCell.error)}</span>`
+          : `${escapeHtml(row[index.date] ?? "")}<br><small>→ ${escapeHtml(dateCell.value)}</small>`;
+        return `<tr class="${rowError ? "import-row-error" : ""}"><td><input type="checkbox" data-import-row="${i}" ${rowError ? "disabled" : "checked"} /></td><td>${dateDisplay}</td><td>${escapeHtml(vendor)}</td><td>${Number.isFinite(amount) ? `${amount >= 0 ? "+" : "−"}${money.format(Math.abs(amount))}` : `<span class="field-error">${escapeHtml(moneyCell.error)}</span>`}</td><td><select data-import-type="${i}" ${rowError ? "disabled" : ""}>${["expense", "refund", "income", "transfer", "adjustment"].map((value) => `<option ${value === type ? "selected" : ""}>${value}</option>`).join("")}</select></td><td><select data-import-category="${i}" required ${rowError ? "disabled" : ""}><option value="">Choose category</option>${optionList(matching, selectedCategory)}</select></td><td><input data-import-description="${i}" maxlength="500" placeholder="Optional" ${rowError ? "disabled" : ""}/></td></tr>`;
       })
       .join("")}</tbody></table>`;
   $("#import-submit").disabled =
@@ -1285,7 +1330,7 @@ function renderImportPreview() {
     index.vendor < 0 ||
     (index.amount < 0 && index.debit < 0 && index.credit < 0);
   $("#import-status").textContent =
-    `Previewing ${rows.length} rows. A mapped Amount column keeps its bank-provided sign. A mapped Debit/Expense/Withdrawal column is always money out; a Credit/Income/Deposit column is always money in. Descriptions do not decide direction.`;
+    `Previewing ${rows.length} rows. ${selectedDateOrder === "auto" ? `Detected date order: ${inferredDateOrder === "mdy" ? "month/day/year" : inferredDateOrder === "dmy" ? "day/month/year" : "needs your selection"}.` : "Using your selected date order."} Dates are normalized to YYYY-MM-DD. A mapped Amount column keeps its bank-provided sign.`;
 }
 async function loadImportSuggestions() {
   if (!state.csv) return;
@@ -1976,7 +2021,8 @@ $("#import-form").file.addEventListener("change", async (event) => {
       "deposit",
       "money in",
       "paid in",
-    ]);
+    ]) +
+    `<label>Date format<select name="date-format"><option value="auto">Auto-detect</option><option value="mdy">Month/day/year</option><option value="dmy">Day/month/year</option></select></label>`;
   $("#mapping").hidden = false;
   $$("select", $("#mapping")).forEach((select) =>
     select.addEventListener(
@@ -2004,12 +2050,22 @@ $("#import-form").addEventListener("submit", (event) => {
       ),
       key = (name) => headers.indexOf(form.get(`map-${name}`)),
       importIndex = importMapping(headers);
+    const selectedDateOrder = form.get("date-format") ?? "auto";
+    const inferredDateOrder = inferDateOrder(
+      sourceRows.map((row) =>
+        importIndex.date >= 0 ? row[importIndex.date] : "",
+      ),
+    );
     const missingCategory = [...selected].find(
       (index) => !$(`[data-import-category="${index}"]`).value,
     );
     if (missingCategory !== undefined)
       throw new Error(
         `Choose a category for included row ${missingCategory + 1}.`,
+      );
+    if (!selected.size)
+      throw new Error(
+        "No valid rows are selected. Correct the date format or amount mappings and try again.",
       );
     const occurrenceCounts = new Map(),
       occurrenceNumbers = sourceRows.map((row, originalIndex) => {
@@ -2018,10 +2074,21 @@ $("#import-form").addEventListener("submit", (event) => {
           transactionType = $(`[data-import-type="${originalIndex}"]`).value,
           direction = moneyCell.direction,
           postedDate =
-            importIndex.postedDate >= 0 ? row[importIndex.postedDate] : "",
+            importIndex.postedDate >= 0 && row[importIndex.postedDate]
+              ? normalizeImportDate(
+                  row[importIndex.postedDate],
+                  selectedDateOrder,
+                  inferredDateOrder,
+                ).value
+              : "",
+          transactionDate = normalizeImportDate(
+            row[key("date")],
+            selectedDateOrder,
+            inferredDateOrder,
+          ).value,
           occurrenceKey = JSON.stringify([
             postedDate,
-            row[key("date")],
+            transactionDate,
             row[key("vendor")],
             cents(Math.abs(rawAmount)),
             transactionType,
@@ -2038,9 +2105,19 @@ $("#import-form").addEventListener("submit", (event) => {
         rawAmount = moneyCell.amount,
         transactionType = $(`[data-import-type="${originalIndex}"]`).value,
         direction = moneyCell.direction,
-        transactionDate = row[key("date")],
+        transactionDate = normalizeImportDate(
+          row[key("date")],
+          selectedDateOrder,
+          inferredDateOrder,
+        ).value,
         postedDate =
-          importIndex.postedDate >= 0 ? row[importIndex.postedDate] : "",
+          importIndex.postedDate >= 0 && row[importIndex.postedDate]
+            ? normalizeImportDate(
+                row[importIndex.postedDate],
+                selectedDateOrder,
+                inferredDateOrder,
+              ).value
+            : "",
         sourceTransactionId =
           importIndex.transactionId >= 0 ? row[importIndex.transactionId] : "",
         sourceRow = JSON.stringify(row);
@@ -2161,8 +2238,21 @@ for (const [formId, endpoint] of [
           body: JSON.stringify({
             username: form.get("username"),
             password: form.get("password"),
+            keepSignedIn: form.get("keepSignedIn") === "on",
           }),
         });
+        try {
+          if (result.data.pageSessionKey)
+            window.sessionStorage.setItem(
+              PAGE_SESSION_KEY,
+              result.data.pageSessionKey,
+            );
+          else window.sessionStorage.removeItem(PAGE_SESSION_KEY);
+        } catch {
+          throw new Error(
+            "This browser must allow session storage to use a short sign-in.",
+          );
+        }
         formElement.reset();
         await enterApp(result.data);
       } catch (error) {
@@ -2192,6 +2282,11 @@ $("#logout").addEventListener("click", () => {
     try {
       await api("/api/v1/auth/logout", { method: "POST" });
     } finally {
+      try {
+        window.sessionStorage.removeItem(PAGE_SESSION_KEY);
+      } catch {
+        // The server-side session was still destroyed.
+      }
       state.categories = [];
       state.accounts = [];
       showAuth();

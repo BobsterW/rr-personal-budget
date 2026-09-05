@@ -162,6 +162,15 @@ body {
   display: grid;
   gap: 15px;
 }
+.keep-signed-in {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.keep-signed-in input {
+  width: auto;
+  min-height: auto;
+}
 .password-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

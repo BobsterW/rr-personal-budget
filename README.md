@@ -1,6 +1,19 @@
-# R&R Budget v7.10
+# R&R Budget v7.11
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.11 changes
+
+- Adds a **Keep me signed in** option. Standard sessions require a per-page key,
+  expire after ten minutes without an authenticated request, and use a browser
+  session cookie. Persistent sessions survive browser restarts for up to 14 days.
+- Signing out deletes the server-side session and clears both browser session
+  components.
+- Recognizes ISO, month/day/year, and day/month/year CSV dates, infers the order
+  from the complete date column, and lets the user choose when every date is
+  ambiguous.
+- Normalizes transaction and posted dates to `YYYY-MM-DD` and shows row-specific
+  errors for ambiguous, malformed, or impossible dates.
 
 ## V7.10 changes
 
