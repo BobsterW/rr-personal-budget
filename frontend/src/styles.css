@@ -7,6 +7,8 @@
   --green: #185b45;
   --lime: #cfe86b;
   --danger: #a33b32;
+  --positive: #185b45;
+  --chart-accent: #16211d;
   --shadow: 0 14px 40px rgba(22, 33, 29, 0.08);
   --sidebar-width: 248px;
   --sidebar-collapsed: 78px;
@@ -1110,6 +1112,201 @@ td {
   min-width: 0;
   margin-top: 12px;
 }
+.cashflow-panel {
+  margin-top: 18px;
+}
+.cashflow-heading {
+  align-items: end;
+}
+.color-by-control {
+  min-width: 220px;
+}
+.cashflow-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.cashflow-multiselect {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.cashflow-multiselect summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  cursor: pointer;
+  font-weight: 750;
+}
+.cashflow-filter-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+.cashflow-filter-menu > div {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 210px;
+  overflow: auto;
+}
+.cashflow-filter-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+}
+.cashflow-chart {
+  width: 100%;
+  min-width: 0;
+}
+.cashflow-chart svg {
+  display: block;
+  width: 100%;
+  min-width: 720px;
+}
+.cashflow-area {
+  opacity: 0.68;
+  stroke: var(--panel);
+  stroke-width: 1.5;
+}
+.cashflow-net-line {
+  fill: none;
+  stroke: var(--chart-accent);
+  stroke-width: 7;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.cashflow-budget {
+  fill: none;
+  stroke-width: 3;
+  stroke-dasharray: 11 8;
+}
+.income-budget-line {
+  stroke: var(--positive);
+}
+.expense-budget-line {
+  stroke: var(--danger);
+}
+.net-budget-line {
+  stroke: var(--chart-accent);
+}
+.cashflow-zero {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+.cashflow-point circle {
+  fill: var(--panel);
+  stroke: var(--chart-accent);
+  stroke-width: 3;
+}
+.cashflow-point text {
+  fill: var(--chart-accent);
+  font-size: 12px;
+  font-weight: 800;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 4px;
+}
+.cashflow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 20px;
+  padding-top: 14px;
+}
+.cashflow-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.cashflow-legend span::before,
+.cashflow-legend span i {
+  width: 24px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--muted);
+  content: "";
+}
+.cashflow-legend span i {
+  display: inline-block;
+}
+.cashflow-legend span:has(i)::before {
+  display: none;
+}
+.cashflow-legend .income-key::before {
+  background: var(--positive);
+  height: 10px;
+}
+.cashflow-legend .expense-key::before {
+  background: var(--danger);
+  height: 10px;
+}
+.cashflow-legend .cash-key::before {
+  background: var(--chart-accent);
+}
+.cashflow-legend .income-budget-key::before,
+.cashflow-legend .expense-budget-key::before,
+.cashflow-legend .net-budget-key::before {
+  height: 3px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--chart-accent) 0 8px,
+    transparent 8px 13px
+  );
+}
+.cashflow-legend .income-budget-key::before {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--positive) 0 8px,
+    transparent 8px 13px
+  );
+}
+.cashflow-legend .expense-budget-key::before {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--danger) 0 8px,
+    transparent 8px 13px
+  );
+}
+.theme-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+.website-colors-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  gap: 14px;
+}
+.website-colors-form input[type="color"] {
+  width: 100%;
+  min-height: 48px;
+  padding: 4px;
+}
+.theme-preview {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.theme-preview-positive {
+  color: var(--positive);
+}
+.theme-preview-negative {
+  color: var(--danger);
+}
 .monthly-trend-stack {
   display: grid;
   align-items: start;
@@ -1376,6 +1573,18 @@ dialog::backdrop {
   clip: rect(0, 0, 0, 0);
 }
 @media (max-width: 800px) {
+  .cashflow-heading,
+  .cashflow-filter-grid,
+  .website-colors-form {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .cashflow-filter-menu > div {
+    grid-template-columns: 1fr;
+  }
+  .cashflow-chart .trend-chart-frame {
+    overflow-x: auto;
+  }
   .topbar {
     width: min(310px, 86vw) !important;
     height: 100vh;

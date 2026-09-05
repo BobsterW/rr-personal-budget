@@ -1,6 +1,18 @@
-# R&R Budget v7.11
+# R&R Budget v7.12
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.12 changes
+
+- Adds a Cash Flow mode to Monthly Activity with diverging income/expense areas,
+  a bold actual cash-flow line, independent multi-select master-category filters,
+  and master-category or income/expense coloring.
+- Adds income, expense, and cash-flow budget lines in the income/expense color
+  mode so planned and actual activity can be compared directly.
+- Adds per-user Website Colors settings with presets, live preview, contrast
+  validation, reset controls, and synchronized D1 storage.
+- Adds migration `0012_website_preferences.sql`; V7.11 remains unchanged in its
+  separate directory.
 
 ## V7.11 changes
 

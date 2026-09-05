@@ -25,6 +25,10 @@ const state = {
   csv: null,
   summary: null,
   activityMode: "expense",
+  cashFlowData: null,
+  cashFlowColorBy: "type",
+  cashFlowSelections: { expense: new Set(), income: new Set() },
+  cashFlowFiltersInitialized: false,
   selectedMasterCategoryId: null,
   activityTrendSelection: { kind: "all", id: null, label: "All expenses" },
   bulkEditMode: false,
@@ -36,6 +40,7 @@ const state = {
   selectedNetWorthSeries: "networth",
   balanceSnapshots: [],
   projectionRules: [],
+  websiteColors: null,
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -61,6 +66,79 @@ const escapeHtml = (value) =>
   );
 const NAV_STORAGE_KEY = "rr-budget-nav-collapsed";
 const PAGE_SESSION_KEY = "rr-budget-page-session";
+const defaultWebsiteColors = {
+  highlightColor: "#185b45",
+  backgroundColor: "#f5f2e9",
+  cardColor: "#fffdf7",
+  textColor: "#16211d",
+  positiveColor: "#185b45",
+  negativeColor: "#a33b32",
+  chartAccentColor: "#16211d",
+};
+const themePresets = {
+  original: defaultWebsiteColors,
+  forest: {
+    ...defaultWebsiteColors,
+    highlightColor: "#236b4e",
+    backgroundColor: "#edf3e8",
+    cardColor: "#fbfff8",
+    positiveColor: "#26734f",
+    chartAccentColor: "#123d2d",
+  },
+  ocean: {
+    ...defaultWebsiteColors,
+    highlightColor: "#176b87",
+    backgroundColor: "#eaf4f7",
+    cardColor: "#fbfeff",
+    positiveColor: "#17765f",
+    negativeColor: "#b04444",
+    chartAccentColor: "#123f58",
+  },
+  contrast: {
+    ...defaultWebsiteColors,
+    highlightColor: "#0047ab",
+    backgroundColor: "#ffffff",
+    cardColor: "#ffffff",
+    textColor: "#000000",
+    positiveColor: "#006b35",
+    negativeColor: "#b00020",
+    chartAccentColor: "#000000",
+  },
+};
+function applyWebsiteColors(colors) {
+  const value = { ...defaultWebsiteColors, ...(colors ?? {}) };
+  state.websiteColors = value;
+  const root = document.documentElement.style;
+  root.setProperty("--green", value.highlightColor);
+  root.setProperty("--paper", value.backgroundColor);
+  root.setProperty("--panel", value.cardColor);
+  root.setProperty("--ink", value.textColor);
+  root.setProperty("--positive", value.positiveColor);
+  root.setProperty("--danger", value.negativeColor);
+  root.setProperty("--chart-accent", value.chartAccentColor);
+  const form = $("#website-colors-form");
+  if (form)
+    for (const [name, color] of Object.entries(value))
+      if (form.elements[name]) form.elements[name].value = color;
+}
+function colorContrast(first, second) {
+  const luminance = (hex) => {
+    const channels = hex
+      .slice(1)
+      .match(/.{2}/g)
+      .map((part) => parseInt(part, 16) / 255);
+    const [red, green, blue] = channels.map((value) =>
+      value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+    );
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  };
+  const values = [luminance(first), luminance(second)].sort((a, b) => b - a);
+  return (values[0] + 0.05) / (values[1] + 0.05);
+}
+async function loadWebsiteColors() {
+  const result = await api("/api/v1/website-preferences");
+  applyWebsiteColors(result.data);
+}
 const pageSessionKey = () => {
   try {
     return window.sessionStorage.getItem(PAGE_SESSION_KEY);
@@ -167,7 +245,7 @@ async function enterApp(user) {
     // Storage can be unavailable in private modes; the expanded menu is safe.
   }
   setNavigationCollapsed(collapsed);
-  await loadLookups();
+  await Promise.all([loadLookups(), loadWebsiteColors()]);
   await showView();
 }
 // Reusable, non-blocking status message for forms and background operations.
@@ -592,6 +670,13 @@ function setActivityMode(mode) {
     button.classList.toggle("secondary", !active);
     button.setAttribute("aria-pressed", String(active));
   });
+  const cashFlow = mode === "cashflow";
+  $("#activity-detail-view").hidden = cashFlow;
+  $("#cashflow-view").hidden = !cashFlow;
+  if (cashFlow) {
+    void loadCashFlow();
+    return;
+  }
   const income = mode === "income";
   $("#activity-mix-eyebrow").textContent = income
     ? "Income mix"
@@ -626,6 +711,7 @@ async function loadSummary() {
   const data = result.data;
   state.summary = data;
   if (
+    state.activityMode !== "cashflow" &&
     state.selectedMasterCategoryId !== null &&
     !data.activity[state.activityMode].byMasterCategory.some(
       (row) => masterKey(row.id) === state.selectedMasterCategoryId,
@@ -656,7 +742,8 @@ async function loadSummary() {
     `Showing ${data.startDate} through ${data.endDate} (${data.monthCount} budget month${data.monthCount === 1 ? "" : "s"}).`;
   renderSpendingBreakdown();
   renderFilteredActivityCards();
-  await loadTrend();
+  if (state.activityMode === "cashflow") await loadCashFlow();
+  else await loadTrend();
 }
 function drawTrend(selector, rows) {
   if (!rows.length) {
@@ -733,6 +820,190 @@ async function loadTrend() {
     selection.kind === "all" || selection.kind === "master";
   const result = await api(`/api/v1/spending-trends?${params}`);
   drawTrend("#expense-trend-chart", result.data);
+}
+
+const selectedCashFlowSeries = (kind) => {
+  const rows = state.cashFlowData?.[`${kind}Series`] ?? [];
+  const selected = state.cashFlowSelections[kind];
+  return rows.filter((row) => selected.has(row.id));
+};
+function renderCashFlowFilters() {
+  if (!state.cashFlowData) return;
+  for (const kind of ["expense", "income"]) {
+    const rows = state.cashFlowData[`${kind}Series`];
+    const selected = state.cashFlowSelections[kind];
+    $(`[data-cashflow-options="${kind}"]`).innerHTML = rows
+      .map(
+        (row) =>
+          `<label><input type="checkbox" data-cashflow-kind="${kind}" value="${escapeHtml(row.id)}" ${selected.has(row.id) ? "checked" : ""}/> <span>${escapeHtml(row.name)}</span></label>`,
+      )
+      .join("");
+    $(`[data-filter-count="${kind}"]`).textContent =
+      selected.size === rows.length
+        ? "All"
+        : `${selected.size} of ${rows.length}`;
+  }
+}
+function drawCashFlowChart() {
+  const data = state.cashFlowData;
+  if (!data?.months.length) {
+    $("#cashflow-chart").innerHTML =
+      '<div class="empty">No months in this range.</div>';
+    return;
+  }
+  const expenseRows = selectedCashFlowSeries("expense"),
+    incomeRows = selectedCashFlowSeries("income"),
+    count = data.months.length,
+    // Keep refunds/reversals in the arithmetic so the bold cash-flow line is
+    // always the true net result. Negative category layers collapse at zero
+    // because they cannot be meaningfully stacked on the expense side.
+    sumAt = (rows, index) =>
+      rows.reduce((sum, row) => sum + Number(row.values[index] ?? 0), 0),
+    incomeTotals = data.months.map((_, index) => sumAt(incomeRows, index)),
+    expenseTotals = data.months.map((_, index) => sumAt(expenseRows, index)),
+    cashTotals = incomeTotals.map(
+      (value, index) => value - expenseTotals[index],
+    ),
+    incomeBudget = incomeRows.reduce(
+      (sum, row) => sum + Number(row.budgetMinor ?? 0),
+      0,
+    ),
+    expenseBudget = expenseRows.reduce(
+      (sum, row) => sum + Number(row.budgetMinor ?? 0),
+      0,
+    ),
+    cashBudget = incomeBudget - expenseBudget,
+    bound = Math.max(
+      1,
+      ...incomeTotals,
+      ...expenseTotals,
+      ...cashTotals.map(Math.abs),
+      incomeBudget,
+      expenseBudget,
+      Math.abs(cashBudget),
+    ),
+    plot = { left: 86, right: 1172, top: 34, bottom: 404 },
+    x = (index) =>
+      count === 1
+        ? (plot.left + plot.right) / 2
+        : plot.left + (index / (count - 1)) * (plot.right - plot.left),
+    y = (value) =>
+      plot.top + ((bound - value) / (bound * 2)) * (plot.bottom - plot.top),
+    line = (values) =>
+      values
+        .map((value, index) => `${index ? "L" : "M"}${x(index)},${y(value)}`)
+        .join(" "),
+    area = (lower, upper) =>
+      `${upper.map((value, index) => `${index ? "L" : "M"}${x(index)},${y(value)}`).join(" ")} ${lower
+        .map((value, reverseIndex) => {
+          const index = count - reverseIndex - 1;
+          return `L${x(index)},${y(lower[index])}`;
+        })
+        .join(" ")} Z`,
+    monthLabel = (month) =>
+      new Intl.DateTimeFormat("en-CA", {
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(new Date(`${month}-01T00:00:00Z`)),
+    compactMoney = (minor) =>
+      new Intl.NumberFormat("en-CA", {
+        style: "currency",
+        currency: "CAD",
+        notation: Math.abs(minor) >= 100000 ? "compact" : "standard",
+        maximumFractionDigits: Math.abs(minor) >= 100000 ? 1 : 0,
+      }).format(dollars(minor));
+  const grid = [-1, -0.5, 0, 0.5, 1]
+    .map(
+      (ratio) =>
+        `<line class="chart-grid ${ratio === 0 ? "cashflow-zero" : ""}" x1="${plot.left}" y1="${y(bound * ratio)}" x2="${plot.right}" y2="${y(bound * ratio)}"/><text class="axis-label y-axis-label" x="${plot.left - 10}" y="${y(bound * ratio) + 4}">${compactMoney(bound * ratio)}</text>`,
+    )
+    .join("");
+  const buildLayers = (rows, direction, colorOffset) => {
+    let lower = Array(count).fill(0);
+    return rows
+      .map((row, index) => {
+        const delta = row.values.map(
+          (value) => Math.max(0, Number(value ?? 0)) * direction,
+        );
+        const upper = lower.map((value, point) => value + delta[point]);
+        const color =
+          state.cashFlowColorBy === "type"
+            ? direction > 0
+              ? "var(--positive)"
+              : "var(--danger)"
+            : chartColors[(index + colorOffset) % chartColors.length];
+        const markup = `<path class="cashflow-area" style="fill:${color}" d="${area(lower, upper)}"><title>${escapeHtml(row.name)}</title></path>`;
+        lower = upper;
+        return markup;
+      })
+      .join("");
+  };
+  const displayIncome =
+    state.cashFlowColorBy === "type"
+      ? [{ name: "Income", values: incomeTotals }]
+      : incomeRows;
+  const displayExpense =
+    state.cashFlowColorBy === "type"
+      ? [{ name: "Expenses", values: expenseTotals }]
+      : expenseRows;
+  const areas =
+    buildLayers(displayIncome, 1, 0) +
+    buildLayers(displayExpense, -1, Math.max(1, displayIncome.length));
+  const guides = data.months
+    .map(
+      (month, index) =>
+        `<line class="month-guide" x1="${x(index)}" y1="${plot.top}" x2="${x(index)}" y2="${plot.bottom}"/><text class="axis-label month-label" transform="translate(${x(index)},${plot.bottom + 18}) rotate(-38)">${escapeHtml(monthLabel(month))}</text>`,
+    )
+    .join("");
+  const budgetLines =
+    state.cashFlowColorBy === "type"
+      ? `<path class="cashflow-budget income-budget-line" d="${line(Array(count).fill(incomeBudget))}"/><path class="cashflow-budget expense-budget-line" d="${line(Array(count).fill(-expenseBudget))}"/><path class="cashflow-budget net-budget-line" d="${line(Array(count).fill(cashBudget))}"/>`
+      : "";
+  const points = cashTotals
+    .map(
+      (value, index) =>
+        `<g class="cashflow-point"><circle cx="${x(index)}" cy="${y(value)}" r="4"><title>${escapeHtml(monthLabel(data.months[index]))}: income ${money.format(dollars(incomeTotals[index]))}, expenses ${money.format(dollars(expenseTotals[index]))}, cash flow ${money.format(dollars(value))}</title></circle><text x="${x(index)}" y="${Math.max(plot.top + 12, y(value) - 10)}">${compactMoney(value)}</text></g>`,
+    )
+    .join("");
+  const legend =
+    state.cashFlowColorBy === "type"
+      ? `<span class="income-key">Actual income</span><span class="expense-key">Actual expenses</span><span class="cash-key">Actual cash flow</span><span class="income-budget-key">Income budget</span><span class="expense-budget-key">Expense budget</span><span class="net-budget-key">Budgeted cash flow</span>`
+      : [...incomeRows, ...expenseRows]
+          .map(
+            (row, index) =>
+              `<span><i style="background:${chartColors[index % chartColors.length]}"></i>${escapeHtml(row.name)}</span>`,
+          )
+          .join("") + `<span class="cash-key">Cash flow</span>`;
+  $("#cashflow-chart").innerHTML =
+    `<div class="trend-chart-frame"><svg viewBox="0 0 1200 480" role="img" aria-label="Income above zero, expenses below zero, and net cash flow by month">${grid}${guides}${areas}${budgetLines}<path class="cashflow-net-line" d="${line(cashTotals)}"/>${points}</svg></div><div class="cashflow-legend">${legend}</div>`;
+  $("#cashflow-budget-note").hidden = state.cashFlowColorBy !== "type";
+}
+async function loadCashFlow() {
+  const params = new URLSearchParams({
+    startDate: $("#summary-start-date").value,
+    endDate: $("#summary-end-date").value,
+  });
+  const result = await api(`/api/v1/cash-flow-trends?${params}`);
+  state.cashFlowData = result.data;
+  if (!state.cashFlowFiltersInitialized) {
+    state.cashFlowSelections.expense = new Set(
+      result.data.expenseSeries.map((row) => row.id),
+    );
+    state.cashFlowSelections.income = new Set(
+      result.data.incomeSeries.map((row) => row.id),
+    );
+    state.cashFlowFiltersInitialized = true;
+  } else {
+    for (const kind of ["expense", "income"]) {
+      const valid = new Set(result.data[`${kind}Series`].map((row) => row.id));
+      state.cashFlowSelections[kind] = new Set(
+        [...state.cashFlowSelections[kind]].filter((id) => valid.has(id)),
+      );
+    }
+  }
+  renderCashFlowFilters();
+  drawCashFlowChart();
 }
 
 async function loadBudget() {
@@ -1411,6 +1682,24 @@ document.addEventListener("click", (event) => {
   }
   const target = event.target.closest("button");
   if (!target) return;
+  if (target.dataset.cashflowSelectAll || target.dataset.cashflowClear) {
+    const kind =
+      target.dataset.cashflowSelectAll || target.dataset.cashflowClear;
+    state.cashFlowSelections[kind] = target.dataset.cashflowSelectAll
+      ? new Set(state.cashFlowData[`${kind}Series`].map((row) => row.id))
+      : new Set();
+    renderCashFlowFilters();
+    drawCashFlowChart();
+    return;
+  }
+  if (target.dataset.themePreset) {
+    applyWebsiteColors(themePresets[target.dataset.themePreset]);
+    return;
+  }
+  if (target.id === "reset-website-colors") {
+    applyWebsiteColors(defaultWebsiteColors);
+    return;
+  }
   if (target.id === "clear-master-filter") {
     state.selectedMasterCategoryId = null;
     state.activityTrendSelection = {
@@ -1723,6 +2012,27 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  const cashFlowOption = event.target.closest?.("[data-cashflow-kind]");
+  if (cashFlowOption) {
+    const selected =
+      state.cashFlowSelections[cashFlowOption.dataset.cashflowKind];
+    if (cashFlowOption.checked) selected.add(cashFlowOption.value);
+    else selected.delete(cashFlowOption.value);
+    renderCashFlowFilters();
+    drawCashFlowChart();
+    return;
+  }
+  if (event.target.id === "cashflow-color-by") {
+    state.cashFlowColorBy = event.target.value;
+    drawCashFlowChart();
+    return;
+  }
+  if (event.target.closest?.("#website-colors-form")) {
+    applyWebsiteColors(
+      Object.fromEntries(new FormData($("#website-colors-form"))),
+    );
+    return;
+  }
   const accountToggle = event.target.closest?.("[data-networth-account]");
   if (accountToggle) {
     if (accountToggle.checked)
@@ -1928,6 +2238,26 @@ $("#category-rule-form").addEventListener("submit", (event) => {
     formElement.reset();
     await loadLookups();
     notify("Automatic category rule added.");
+  });
+});
+$("#website-colors-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  void run(async () => {
+    const colors = Object.fromEntries(new FormData(formElement));
+    if (
+      colorContrast(colors.textColor, colors.backgroundColor) < 4.5 ||
+      colorContrast(colors.textColor, colors.cardColor) < 4.5
+    )
+      throw new Error(
+        "Text must have readable contrast against both the page and card colors. Choose a darker text color or lighter backgrounds.",
+      );
+    const result = await api("/api/v1/website-preferences", {
+      method: "PUT",
+      body: JSON.stringify(colors),
+    });
+    applyWebsiteColors(result.data);
+    notify("Website colors saved to your account.");
   });
 });
 $("#account-form").addEventListener("submit", (event) => {

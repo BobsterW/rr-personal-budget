@@ -1038,4 +1038,79 @@ export class BudgetRepository {
       averageMinor,
     }));
   }
+
+  async cashFlowTrend(startDate: string, endDate: string) {
+    const months: string[] = [];
+    const cursor = new Date(`${startDate.slice(0, 7)}-01T00:00:00Z`);
+    const end = new Date(`${endDate.slice(0, 7)}-01T00:00:00Z`);
+    while (cursor <= end) {
+      months.push(cursor.toISOString().slice(0, 7));
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    }
+    const buildSeries = async (type: "expense" | "income") => {
+      const transactionClause =
+        type === "expense"
+          ? "t.transaction_type IN ('expense','refund')"
+          : "t.transaction_type='income'";
+      const effect =
+        type === "expense" ? EXPENSE_EFFECT_SQL : INCOME_EFFECT_SQL;
+      const [actual, budgets] = await Promise.all([
+        this.db
+          .prepare(
+            `SELECT substr(t.transaction_date,1,7) month,COALESCE(mc.id,'unassigned') master_id,COALESCE(mc.name,'Unassigned') master_name,SUM(${effect}) actual_minor FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionClause} GROUP BY month,mc.id,mc.name ORDER BY month,master_name`,
+          )
+          .bind(this.userId, startDate, endDate)
+          .all<{
+            month: string;
+            master_id: string;
+            master_name: string;
+            actual_minor: number;
+          }>(),
+        this.db
+          .prepare(
+            "SELECT COALESCE(mc.id,'unassigned') master_id,COALESCE(mc.name,'Unassigned') master_name,COALESCE(SUM(c.monthly_budget_minor),0) budget_minor FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE c.user_id=? AND c.active=1 AND c.kind=? GROUP BY mc.id,mc.name ORDER BY master_name",
+          )
+          .bind(this.userId, type)
+          .all<{
+            master_id: string;
+            master_name: string;
+            budget_minor: number;
+          }>(),
+      ]);
+      const identities = new Map<
+        string,
+        { id: string; name: string; budgetMinor: number }
+      >();
+      for (const row of budgets.results)
+        identities.set(row.master_id, {
+          id: row.master_id,
+          name: row.master_name,
+          budgetMinor: Number(row.budget_minor),
+        });
+      for (const row of actual.results)
+        if (!identities.has(row.master_id))
+          identities.set(row.master_id, {
+            id: row.master_id,
+            name: row.master_name,
+            budgetMinor: 0,
+          });
+      const lookup = new Map(
+        actual.results.map((row) => [
+          `${row.master_id}:${row.month}`,
+          Number(row.actual_minor),
+        ]),
+      );
+      return [...identities.values()].map((identity) => ({
+        ...identity,
+        values: months.map(
+          (month) => lookup.get(`${identity.id}:${month}`) ?? 0,
+        ),
+      }));
+    };
+    const [expenseSeries, incomeSeries] = await Promise.all([
+      buildSeries("expense"),
+      buildSeries("income"),
+    ]);
+    return { months, expenseSeries, incomeSeries };
+  }
 }

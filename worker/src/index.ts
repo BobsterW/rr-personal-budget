@@ -815,6 +815,62 @@ async function route(request: Request, env: Env): Promise<Response> {
       ),
     });
   }
+  if (path === "/api/v1/cash-flow-trends" && method === "GET") {
+    const startDate = requireDate(
+        url.searchParams.get("startDate"),
+        "startDate",
+      ),
+      endDate = requireDate(url.searchParams.get("endDate"), "endDate");
+    if (startDate > endDate)
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "startDate must be on or before endDate.",
+      );
+    return json({ data: await repo.cashFlowTrend(startDate, endDate) });
+  }
+
+  if (path === "/api/v1/website-preferences" && method === "GET") {
+    const record = await env.DB.prepare(
+      "SELECT highlight_color,background_color,card_color,text_color,positive_color,negative_color,chart_accent_color FROM website_preferences WHERE user_id=?",
+    )
+      .bind(user.id)
+      .first<Record<string, unknown>>();
+    return json({ data: record ? toCamel(record) : null });
+  }
+  if (path === "/api/v1/website-preferences" && method === "PUT") {
+    const body = assertObject(await readJson(request));
+    const fields = [
+      "highlightColor",
+      "backgroundColor",
+      "cardColor",
+      "textColor",
+      "positiveColor",
+      "negativeColor",
+      "chartAccentColor",
+    ] as const;
+    const colors = fields.map((field) => {
+      const value = requireString(body, field, 7).toLowerCase();
+      if (!/^#[0-9a-f]{6}$/.test(value))
+        throw new ApiError(
+          422,
+          "VALIDATION_ERROR",
+          `${field} must be a six-digit hexadecimal color.`,
+        );
+      return value;
+    });
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO website_preferences (user_id,highlight_color,background_color,card_color,text_color,positive_color,negative_color,chart_accent_color,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET highlight_color=excluded.highlight_color,background_color=excluded.background_color,card_color=excluded.card_color,text_color=excluded.text_color,positive_color=excluded.positive_color,negative_color=excluded.negative_color,chart_accent_color=excluded.chart_accent_color,updated_at=excluded.updated_at",
+    )
+      .bind(user.id, ...colors, now)
+      .run();
+    return json({
+      data: Object.fromEntries(
+        fields.map((field, index) => [field, colors[index]]),
+      ),
+    });
+  }
 
   if (path === "/api/v1/future-purchases" && method === "GET")
     return json({

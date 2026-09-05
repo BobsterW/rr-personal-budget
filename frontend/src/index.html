@@ -8,7 +8,7 @@
       content="Private transaction, monthly spending, and net-worth tracker."
     />
     <title>R&R Budget</title>
-    <link rel="stylesheet" href="styles.css?v=7.11.0" />
+    <link rel="stylesheet" href="styles.css?v=7.12.0" />
   </head>
   <body>
     <!-- Authentication is the only visible section until /auth/me confirms a session. -->
@@ -320,59 +320,146 @@
           >
             Income
           </button>
+          <button
+            class="activity-mode secondary"
+            data-activity-mode="cashflow"
+            aria-pressed="false"
+          >
+            Cash flow
+          </button>
         </div>
-        <div class="spending-breakdown">
-          <section class="panel donut-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow" id="activity-mix-eyebrow">Spending mix</p>
-                <h2 id="activity-master-title">Expense master categories</h2>
+        <div id="activity-detail-view">
+          <div class="spending-breakdown">
+            <section class="panel donut-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow" id="activity-mix-eyebrow">Spending mix</p>
+                  <h2 id="activity-master-title">Expense master categories</h2>
+                </div>
+                <button
+                  id="clear-master-filter"
+                  class="secondary compact"
+                  hidden
+                >
+                  Show all
+                </button>
               </div>
-              <button id="clear-master-filter" class="secondary compact" hidden>
-                Show all
-              </button>
-            </div>
-            <div id="master-category-donut" class="master-category-donut"></div>
-            <div id="master-category-legend" class="donut-legend"></div>
-          </section>
-          <section class="panel ranked-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Largest first</p>
-                <h2 id="category-ranking-title">All categories</h2>
+              <div
+                id="master-category-donut"
+                class="master-category-donut"
+              ></div>
+              <div id="master-category-legend" class="donut-legend"></div>
+            </section>
+            <section class="panel ranked-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Largest first</p>
+                  <h2 id="category-ranking-title">All categories</h2>
+                </div>
               </div>
-            </div>
-            <div id="category-ranked-bars" class="ranked-bars"></div>
-          </section>
-        </div>
-        <section class="panel">
-          <h2 id="activity-account-title">Expenses by account</h2>
-          <div id="account-bars" class="bars"></div>
-        </section>
-        <section class="panel">
-          <h2 id="activity-budget-title">Category budget tracking</h2>
-          <div id="category-budget-status" class="budget-status"></div>
-        </section>
-        <div class="monthly-trend-stack">
+              <div id="category-ranked-bars" class="ranked-bars"></div>
+            </section>
+          </div>
           <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <h2 id="activity-trend-title">Expense trend</h2>
-                <p id="activity-trend-filter-label" class="fine-print">
-                  Showing all expenses
-                </p>
-              </div>
-              <button
-                id="clear-activity-trend-filter"
-                class="secondary compact"
-                hidden
-              >
-                Clear visual filter
-              </button>
-            </div>
-            <div id="expense-trend-chart" class="trend-chart"></div>
+            <h2 id="activity-account-title">Expenses by account</h2>
+            <div id="account-bars" class="bars"></div>
           </section>
+          <section class="panel">
+            <h2 id="activity-budget-title">Category budget tracking</h2>
+            <div id="category-budget-status" class="budget-status"></div>
+          </section>
+          <div class="monthly-trend-stack">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2 id="activity-trend-title">Expense trend</h2>
+                  <p id="activity-trend-filter-label" class="fine-print">
+                    Showing all expenses
+                  </p>
+                </div>
+                <button
+                  id="clear-activity-trend-filter"
+                  class="secondary compact"
+                  hidden
+                >
+                  Clear visual filter
+                </button>
+              </div>
+              <div id="expense-trend-chart" class="trend-chart"></div>
+            </section>
+          </div>
         </div>
+        <section id="cashflow-view" class="panel cashflow-panel" hidden>
+          <div class="panel-heading cashflow-heading">
+            <div>
+              <p class="eyebrow">Income, spending &amp; the difference</p>
+              <h2>Cash flow trend</h2>
+              <p class="fine-print">
+                Income is above zero, expenses are below zero, and the bold line
+                is net cash flow.
+              </p>
+            </div>
+            <label class="color-by-control"
+              >Color by
+              <select id="cashflow-color-by">
+                <option value="type">Expenses / income</option>
+                <option value="master">Master categories</option>
+              </select>
+            </label>
+          </div>
+          <div class="cashflow-filter-grid">
+            <details class="cashflow-multiselect" id="expense-master-filter">
+              <summary>
+                Expense master categories
+                <strong data-filter-count="expense">All</strong>
+              </summary>
+              <div class="cashflow-filter-menu">
+                <button
+                  type="button"
+                  class="secondary compact"
+                  data-cashflow-select-all="expense"
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  class="secondary compact"
+                  data-cashflow-clear="expense"
+                >
+                  Clear
+                </button>
+                <div data-cashflow-options="expense"></div>
+              </div>
+            </details>
+            <details class="cashflow-multiselect" id="income-master-filter">
+              <summary>
+                Income master categories
+                <strong data-filter-count="income">All</strong>
+              </summary>
+              <div class="cashflow-filter-menu">
+                <button
+                  type="button"
+                  class="secondary compact"
+                  data-cashflow-select-all="income"
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  class="secondary compact"
+                  data-cashflow-clear="income"
+                >
+                  Clear
+                </button>
+                <div data-cashflow-options="income"></div>
+              </div>
+            </details>
+          </div>
+          <div id="cashflow-chart" class="cashflow-chart"></div>
+          <p id="cashflow-budget-note" class="fine-print">
+            Budget lines are shown in Expenses / income color mode.
+          </p>
+        </section>
       </section>
       <section id="budget" class="view" hidden>
         <div class="hero">
@@ -612,6 +699,82 @@
                 <button>Add rule</button>
               </form>
               <ul id="category-rules-list" class="settings-list"></ul>
+            </div>
+          </details>
+          <details class="panel settings-disclosure">
+            <summary>Website colors</summary>
+            <div class="settings-content">
+              <p class="fine-print">
+                Choose a preset or customize the colors saved to your account.
+              </p>
+              <div
+                class="theme-presets"
+                role="group"
+                aria-label="Color presets"
+              >
+                <button
+                  type="button"
+                  class="secondary"
+                  data-theme-preset="original"
+                >
+                  Original
+                </button>
+                <button
+                  type="button"
+                  class="secondary"
+                  data-theme-preset="forest"
+                >
+                  Forest
+                </button>
+                <button
+                  type="button"
+                  class="secondary"
+                  data-theme-preset="ocean"
+                >
+                  Ocean
+                </button>
+                <button
+                  type="button"
+                  class="secondary"
+                  data-theme-preset="contrast"
+                >
+                  High contrast
+                </button>
+              </div>
+              <form id="website-colors-form" class="website-colors-form">
+                <label
+                  >Highlight color<input type="color" name="highlightColor"
+                /></label>
+                <label
+                  >Background color<input type="color" name="backgroundColor"
+                /></label>
+                <label>Card color<input type="color" name="cardColor" /></label>
+                <label>Text color<input type="color" name="textColor" /></label>
+                <label
+                  >Positive color<input type="color" name="positiveColor"
+                /></label>
+                <label
+                  >Negative color<input type="color" name="negativeColor"
+                /></label>
+                <label
+                  >Chart accent<input type="color" name="chartAccentColor"
+                /></label>
+                <div class="theme-preview">
+                  <strong>Live preview</strong>
+                  <span class="theme-preview-positive">+$1,250 income</span>
+                  <span class="theme-preview-negative">−$820 expenses</span>
+                </div>
+                <div class="dialog-actions wide">
+                  <button
+                    type="button"
+                    class="secondary"
+                    id="reset-website-colors"
+                  >
+                    Reset to default
+                  </button>
+                  <button>Save website colors</button>
+                </div>
+              </form>
             </div>
           </details>
         </div>
@@ -884,6 +1047,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.11.0"></script>
+    <script type="module" src="app.js?v=7.12.0"></script>
   </body>
 </html>
