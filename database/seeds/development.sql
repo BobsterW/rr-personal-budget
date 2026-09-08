@@ -3,6 +3,11 @@
 INSERT OR IGNORE INTO users (id,username,username_normalized,password_hash,created_at,updated_at) VALUES
 ('user-demo','demo','demo','$2b$12$FCEI1c5.jWw2buLM4reLvOdsWVjouZaKF./Tdn8wOUS1mCDF.dW4C',datetime('now'),datetime('now'));
 
+INSERT OR IGNORE INTO workspaces(id,name,data_owner_user_id,created_at,updated_at) VALUES
+('workspace-user-demo','Demo Budget','user-demo',datetime('now'),datetime('now'));
+INSERT OR IGNORE INTO workspace_memberships(workspace_id,user_id,role,created_at,updated_at) VALUES
+('workspace-user-demo','user-demo','owner',datetime('now'),datetime('now'));
+
 INSERT OR IGNORE INTO projection_assumptions (id,user_id,annual_asset_growth_bps,annual_liability_interest_bps,horizon_months,updated_at) VALUES
 ('projection-demo','user-demo',400,500,60,datetime('now'));
 

@@ -181,6 +181,109 @@ export class BudgetRepository {
     return result.meta.changes > 0;
   }
 
+  async listArchivedItems() {
+    const [categories, masters] = await Promise.all([
+      this.db
+        .prepare(
+          "SELECT id,name,kind,updated_at FROM categories WHERE user_id=? AND active=0 ORDER BY name",
+        )
+        .bind(this.userId)
+        .all(),
+      this.db
+        .prepare(
+          "SELECT id,name,updated_at FROM master_categories WHERE user_id=? AND active=0 ORDER BY name",
+        )
+        .bind(this.userId)
+        .all(),
+    ]);
+    return {
+      categories: categories.results,
+      masterCategories: masters.results,
+    };
+  }
+
+  async restoreArchived(kind: "category" | "master", id: string) {
+    const table = kind === "category" ? "categories" : "master_categories";
+    const result = await this.db
+      .prepare(
+        `UPDATE ${table} SET active=1,updated_at=? WHERE id=? AND user_id=? AND active=0`,
+      )
+      .bind(new Date().toISOString(), id, this.userId)
+      .run();
+    return result.meta.changes > 0;
+  }
+
+  async permanentlyDeleteCategory(id: string, replacementId: string) {
+    const rows = await this.db
+      .prepare(
+        "SELECT id,kind,active FROM categories WHERE user_id=? AND id IN (?,?)",
+      )
+      .bind(this.userId, id, replacementId)
+      .all<{ id: string; kind: string; active: number }>();
+    const source = rows.results.find((row) => row.id === id),
+      replacement = rows.results.find((row) => row.id === replacementId);
+    if (!source || source.active !== 0) return false;
+    if (
+      !replacement ||
+      replacement.active !== 1 ||
+      replacement.kind !== source.kind
+    )
+      throw new Error(
+        "Replacement category must be active and have the same type.",
+      );
+    const now = new Date().toISOString();
+    await this.db.batch([
+      this.db
+        .prepare(
+          "UPDATE transactions SET category_id=?,updated_at=? WHERE user_id=? AND category_id=?",
+        )
+        .bind(replacementId, now, this.userId, id),
+      this.db
+        .prepare(
+          "UPDATE category_rules SET category_id=?,updated_at=? WHERE user_id=? AND category_id=?",
+        )
+        .bind(replacementId, now, this.userId, id),
+      this.db
+        .prepare("DELETE FROM categories WHERE user_id=? AND id=? AND active=0")
+        .bind(this.userId, id),
+    ]);
+    return true;
+  }
+
+  async permanentlyDeleteMaster(id: string, replacementId: string | null) {
+    const source = await this.db
+      .prepare(
+        "SELECT id FROM master_categories WHERE id=? AND user_id=? AND active=0",
+      )
+      .bind(id, this.userId)
+      .first();
+    if (!source) return false;
+    if (replacementId) {
+      const replacement = await this.db
+        .prepare(
+          "SELECT id FROM master_categories WHERE id=? AND user_id=? AND active=1",
+        )
+        .bind(replacementId, this.userId)
+        .first();
+      if (!replacement)
+        throw new Error("Replacement master category must be active.");
+    }
+    const now = new Date().toISOString();
+    await this.db.batch([
+      this.db
+        .prepare(
+          "UPDATE categories SET master_category_id=?,updated_at=? WHERE user_id=? AND master_category_id=?",
+        )
+        .bind(replacementId, now, this.userId, id),
+      this.db
+        .prepare(
+          "DELETE FROM master_categories WHERE user_id=? AND id=? AND active=0",
+        )
+        .bind(this.userId, id),
+    ]);
+    return true;
+  }
+
   async updateCategoryMaster(id: string, masterCategoryId: string | null) {
     const result = await this.db
       .prepare(

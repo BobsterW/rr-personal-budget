@@ -80,7 +80,8 @@ function cors(request: Request, env: Env): Record<string, string> {
     ? {
         "access-control-allow-origin": origin,
         "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-        "access-control-allow-headers": "content-type,x-page-session",
+        "access-control-allow-headers":
+          "content-type,x-page-session,x-workspace-id",
         "access-control-allow-credentials": "true",
         vary: "Origin",
       }
@@ -146,6 +147,111 @@ function toCamel(row: Record<string, unknown>) {
       value,
     ]),
   );
+}
+
+type WorkspaceRole = "owner" | "editor" | "viewer";
+interface WorkspaceAccess {
+  id: string;
+  name: string;
+  role: WorkspaceRole;
+  dataOwnerUserId: string;
+}
+async function listWorkspaces(db: D1Database, userId: string) {
+  const result = await db
+    .prepare(
+      "SELECT w.id,w.name,m.role FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id WHERE m.user_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END,w.name",
+    )
+    .bind(userId)
+    .all<Record<string, unknown>>();
+  return result.results.map(toCamel);
+}
+async function workspaceAccess(
+  request: Request,
+  db: D1Database,
+  userId: string,
+): Promise<WorkspaceAccess> {
+  const requested = request.headers.get("x-workspace-id");
+  const row = await db
+    .prepare(
+      `SELECT w.id,w.name,w.data_owner_user_id,m.role FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id WHERE m.user_id=? ${requested ? "AND w.id=?" : "ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END LIMIT 1"}`,
+    )
+    .bind(...(requested ? [userId, requested] : [userId]))
+    .first<{
+      id: string;
+      name: string;
+      data_owner_user_id: string;
+      role: WorkspaceRole;
+    }>();
+  if (!row)
+    throw new ApiError(
+      403,
+      "WORKSPACE_ACCESS_DENIED",
+      "You do not have access to this budget.",
+    );
+  return {
+    id: row.id,
+    name: row.name,
+    role: row.role,
+    dataOwnerUserId: row.data_owner_user_id,
+  };
+}
+function assertWorkspacePermission(
+  role: WorkspaceRole,
+  path: string,
+  method: string,
+) {
+  if (role === "owner") return;
+  if (role === "editor") {
+    if (path.startsWith("/api/v1/workspace"))
+      throw new ApiError(
+        403,
+        "OWNER_REQUIRED",
+        "Only the budget owner can manage members or permanently delete archived items.",
+      );
+    return;
+  }
+  const viewerRead =
+    method === "GET" &&
+    (path === "/api/v1/accounts" ||
+      path === "/api/v1/categories" ||
+      path === "/api/v1/master-categories" ||
+      path === "/api/v1/monthly-summary" ||
+      path === "/api/v1/spending-trends" ||
+      path === "/api/v1/cash-flow-trends" ||
+      path === "/api/v1/net-worth-timeline" ||
+      path === "/api/v1/projection" ||
+      path === "/api/v1/balance-snapshots" ||
+      path === "/api/v1/projection-rules" ||
+      path === "/api/v1/website-preferences");
+  if (!viewerRead)
+    throw new ApiError(
+      403,
+      "VIEW_ONLY",
+      "Viewers can only open Monthly Activity and Net Worth.",
+    );
+}
+async function audit(
+  db: D1Database,
+  userId: string,
+  workspaceId: string | null,
+  action: string,
+  targetType: string,
+  targetId: string | null,
+) {
+  await db
+    .prepare(
+      "INSERT INTO audit_events(id,actor_user_id,workspace_id,action,target_type,target_id,created_at) VALUES(?,?,?,?,?,?,?)",
+    )
+    .bind(
+      crypto.randomUUID(),
+      userId,
+      workspaceId,
+      action,
+      targetType,
+      targetId,
+      new Date().toISOString(),
+    )
+    .run();
 }
 
 // Convert untrusted account JSON into integer cents/basis-points and enums.
@@ -233,6 +339,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const input = await credentials(request);
     const password = validatePassword(input.password);
     const userId = crypto.randomUUID();
+    const workspaceId = crypto.randomUUID();
     const now = new Date().toISOString();
     const categorySeed = [
       ["Uncategorized expense", "expense"],
@@ -259,6 +366,12 @@ async function route(request: Request, env: Env): Promise<Response> {
       env.DB.prepare(
         "INSERT INTO projection_assumptions (id,user_id,annual_asset_growth_bps,annual_liability_interest_bps,horizon_months,updated_at) VALUES (?,?,?,?,?,?)",
       ).bind(crypto.randomUUID(), userId, 400, 500, 60, now),
+      env.DB.prepare(
+        "INSERT INTO workspaces(id,name,data_owner_user_id,created_at,updated_at) VALUES(?,?,?,?,?)",
+      ).bind(workspaceId, `${input.username}'s Budget`, userId, now, now),
+      env.DB.prepare(
+        "INSERT INTO workspace_memberships(workspace_id,user_id,role,created_at,updated_at) VALUES(?,?,?,?,?)",
+      ).bind(workspaceId, userId, "owner", now, now),
       ...categorySeed.map(([name, kind]) =>
         env.DB.prepare(
           "INSERT INTO categories (id,user_id,name,kind,created_at,updated_at) VALUES (?,?,?,?,?,?)",
@@ -287,6 +400,15 @@ async function route(request: Request, env: Env): Promise<Response> {
         data: {
           id: userId,
           username: input.username,
+          platformRole: "standard",
+          workspaces: [
+            {
+              id: workspaceId,
+              name: `${input.username}'s Budget`,
+              role: "owner",
+            },
+          ],
+          workspaceId,
           pageSessionKey: session.pageSessionKey,
         },
       },
@@ -316,10 +438,15 @@ async function route(request: Request, env: Env): Promise<Response> {
         "Too many sign-in attempts. Try again in 15 minutes.",
       );
     const user = await env.DB.prepare(
-      "SELECT id,username,password_hash FROM users WHERE username_normalized=? AND active=1",
+      "SELECT id,username,password_hash,platform_role FROM users WHERE username_normalized=? AND active=1",
     )
       .bind(normalized)
-      .first<{ id: string; username: string; password_hash: string }>();
+      .first<{
+        id: string;
+        username: string;
+        password_hash: string;
+        platform_role: "standard" | "admin";
+      }>();
     const matches = user
       ? await passwordMatches(input.password, user.password_hash)
       : await passwordMatches(
@@ -349,11 +476,20 @@ async function route(request: Request, env: Env): Promise<Response> {
       request,
       input.keepSignedIn,
     );
+    const workspaces = await listWorkspaces(env.DB, user.id);
+    await env.DB.prepare(
+      "INSERT INTO usage_events(id,user_id,event_type,created_at) VALUES(?,?,?,?)",
+    )
+      .bind(crypto.randomUUID(), user.id, "login", new Date().toISOString())
+      .run();
     return json(
       {
         data: {
           id: user.id,
           username: user.username,
+          platformRole: user.platform_role,
+          workspaces,
+          workspaceId: workspaces[0]?.id ?? null,
           pageSessionKey: session.pageSessionKey,
         },
       },
@@ -370,9 +506,284 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   const user = await requireUser(request, env.DB);
-  if (path === "/api/v1/auth/me" && method === "GET")
-    return json({ data: user });
-  const repo = new BudgetRepository(env.DB, user.id);
+  if (path === "/api/v1/auth/me" && method === "GET") {
+    const workspaces = await listWorkspaces(env.DB, user.id);
+    return json({
+      data: { ...user, workspaces, workspaceId: workspaces[0]?.id ?? null },
+    });
+  }
+
+  // Platform administration never grants access to another member's finances.
+  if (path.startsWith("/api/v1/platform/")) {
+    if (user.platformRole !== "admin")
+      throw new ApiError(
+        403,
+        "PLATFORM_ADMIN_REQUIRED",
+        "Platform administrator access is required.",
+      );
+    if (path === "/api/v1/platform/users" && method === "GET") {
+      const search = (url.searchParams.get("search") ?? "").slice(0, 80),
+        role = url.searchParams.get("role");
+      const clauses = ["1=1"],
+        values: unknown[] = [];
+      if (search) {
+        clauses.push("username LIKE ?");
+        values.push(`%${search}%`);
+      }
+      if (role === "standard" || role === "admin") {
+        clauses.push("platform_role=?");
+        values.push(role);
+      }
+      const rows = await env.DB.prepare(
+        `SELECT id,username,platform_role,active,created_at FROM users WHERE ${clauses.join(" AND ")} ORDER BY username LIMIT 250`,
+      )
+        .bind(...values)
+        .all<Record<string, unknown>>();
+      return json({ data: rows.results.map(toCamel) });
+    }
+    const platformUser = path.match(/^\/api\/v1\/platform\/users\/([^/]+)$/);
+    if (platformUser && method === "PATCH") {
+      const body = assertObject(await readJson(request));
+      const platformRole = body.platformRole,
+        active = body.active;
+      if (
+        platformUser[1] === user.id &&
+        (platformRole !== "admin" || active === false)
+      )
+        throw new ApiError(
+          422,
+          "LAST_ADMIN_SAFEGUARD",
+          "You cannot remove or disable your own administrator access.",
+        );
+      if (platformRole !== "standard" && platformRole !== "admin")
+        throw new ApiError(422, "VALIDATION_ERROR", "Invalid platform role.");
+      if (typeof active !== "boolean")
+        throw new ApiError(
+          422,
+          "VALIDATION_ERROR",
+          "active must be true or false.",
+        );
+      await env.DB.prepare(
+        "UPDATE users SET platform_role=?,active=?,updated_at=? WHERE id=?",
+      )
+        .bind(
+          platformRole,
+          active ? 1 : 0,
+          new Date().toISOString(),
+          platformUser[1],
+        )
+        .run();
+      if (!active)
+        await env.DB.prepare("DELETE FROM sessions WHERE user_id=?")
+          .bind(platformUser[1])
+          .run();
+      await audit(
+        env.DB,
+        user.id,
+        null,
+        "platform_user_updated",
+        "user",
+        platformUser[1]!,
+      );
+      return json({ data: { id: platformUser[1], platformRole, active } });
+    }
+    if (path === "/api/v1/platform/usage" && method === "GET") {
+      const data = await env.DB.prepare(
+        "SELECT (SELECT COUNT(*) FROM users WHERE active=1) total_users,(SELECT ROUND(COUNT(*)*1.0/NULLIF(COUNT(DISTINCT user_id),0),1) FROM usage_events WHERE event_type='login' AND created_at>=datetime('now','-30 days')) average_uses_per_user,(SELECT ROUND(COUNT(*)*1.0/NULLIF(COUNT(DISTINCT user_id),0),1) FROM transactions) average_transactions_per_user",
+      ).first<Record<string, unknown>>();
+      return json({ data: toCamel(data ?? {}) });
+    }
+    throw new ApiError(404, "NOT_FOUND", "Platform route not found.");
+  }
+
+  const workspace = await workspaceAccess(request, env.DB, user.id);
+  assertWorkspacePermission(workspace.role, path, method);
+  const repo = new BudgetRepository(env.DB, workspace.dataOwnerUserId);
+
+  if (path === "/api/v1/workspace" && method === "GET")
+    return json({
+      data: {
+        ...workspace,
+        members: await env.DB.prepare(
+          "SELECT u.id,u.username,m.role FROM workspace_memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=? ORDER BY m.role,u.username",
+        )
+          .bind(workspace.id)
+          .all()
+          .then((r) =>
+            r.results.map((row) => toCamel(row as Record<string, unknown>)),
+          ),
+      },
+    });
+  if (path === "/api/v1/workspace/members" && method === "POST") {
+    const body = assertObject(await readJson(request)),
+      username = requireString(body, "username", 40),
+      role = body.role;
+    if (role !== "editor" && role !== "viewer")
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Invite role must be editor or viewer.",
+      );
+    const invited = await env.DB.prepare(
+      "SELECT id FROM users WHERE username_normalized=? AND active=1",
+    )
+      .bind(normalizeUsername(username))
+      .first<{ id: string }>();
+    if (!invited)
+      throw new ApiError(
+        404,
+        "USER_NOT_FOUND",
+        "That user must create an account before being invited.",
+      );
+    await env.DB.prepare(
+      "INSERT INTO workspace_memberships(workspace_id,user_id,role,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO UPDATE SET role=excluded.role,updated_at=excluded.updated_at",
+    )
+      .bind(
+        workspace.id,
+        invited.id,
+        role,
+        new Date().toISOString(),
+        new Date().toISOString(),
+      )
+      .run();
+    await audit(
+      env.DB,
+      user.id,
+      workspace.id,
+      "member_invited",
+      "user",
+      invited.id,
+    );
+    return json({ data: { userId: invited.id, role } }, 201);
+  }
+  const memberMatch = path.match(/^\/api\/v1\/workspace\/members\/([^/]+)$/);
+  if (memberMatch && method === "PATCH") {
+    const body = assertObject(await readJson(request)),
+      role = body.role;
+    if (role !== "editor" && role !== "viewer")
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Role must be editor or viewer.",
+      );
+    await env.DB.prepare(
+      "UPDATE workspace_memberships SET role=?,updated_at=? WHERE workspace_id=? AND user_id=? AND role!='owner'",
+    )
+      .bind(role, new Date().toISOString(), workspace.id, memberMatch[1])
+      .run();
+    await audit(
+      env.DB,
+      user.id,
+      workspace.id,
+      "member_role_updated",
+      "user",
+      memberMatch[1]!,
+    );
+    return json({ data: { userId: memberMatch[1], role } });
+  }
+  if (memberMatch && method === "DELETE") {
+    await env.DB.prepare(
+      "DELETE FROM workspace_memberships WHERE workspace_id=? AND user_id=? AND role!='owner'",
+    )
+      .bind(workspace.id, memberMatch[1])
+      .run();
+    await audit(
+      env.DB,
+      user.id,
+      workspace.id,
+      "member_removed",
+      "user",
+      memberMatch[1]!,
+    );
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/api/v1/archived-items" && method === "GET") {
+    if (workspace.role !== "owner")
+      throw new ApiError(
+        403,
+        "OWNER_REQUIRED",
+        "Only the budget owner can manage archived items.",
+      );
+    const data = await repo.listArchivedItems();
+    return json({
+      data: {
+        categories: data.categories.map((row) =>
+          toCamel(row as Record<string, unknown>),
+        ),
+        masterCategories: data.masterCategories.map((row) =>
+          toCamel(row as Record<string, unknown>),
+        ),
+      },
+    });
+  }
+  const archivedMatch = path.match(
+    /^\/api\/v1\/archived-items\/(category|master)\/([^/]+)$/,
+  );
+  if (archivedMatch && method === "POST") {
+    if (workspace.role !== "owner")
+      throw new ApiError(
+        403,
+        "OWNER_REQUIRED",
+        "Only the budget owner can restore archived items.",
+      );
+    if (
+      !(await repo.restoreArchived(
+        archivedMatch[1] as "category" | "master",
+        archivedMatch[2]!,
+      ))
+    )
+      throw new ApiError(404, "NOT_FOUND", "Archived item not found.");
+    await audit(
+      env.DB,
+      user.id,
+      workspace.id,
+      "archived_item_restored",
+      archivedMatch[1]!,
+      archivedMatch[2]!,
+    );
+    return json({ data: { restored: true } });
+  }
+  if (archivedMatch && method === "DELETE") {
+    if (workspace.role !== "owner")
+      throw new ApiError(
+        403,
+        "OWNER_REQUIRED",
+        "Only the budget owner can permanently delete archived items.",
+      );
+    const body = assertObject(await readJson(request));
+    const replacementId =
+      body.replacementId === null ? null : requireString(body, "replacementId");
+    let found = false;
+    try {
+      found =
+        archivedMatch[1] === "category"
+          ? await repo.permanentlyDeleteCategory(
+              archivedMatch[2]!,
+              replacementId ?? "",
+            )
+          : await repo.permanentlyDeleteMaster(
+              archivedMatch[2]!,
+              replacementId,
+            );
+    } catch (error) {
+      throw new ApiError(
+        422,
+        "INVALID_REASSIGNMENT",
+        error instanceof Error ? error.message : "Invalid replacement.",
+      );
+    }
+    if (!found)
+      throw new ApiError(404, "NOT_FOUND", "Archived item not found.");
+    await audit(
+      env.DB,
+      user.id,
+      workspace.id,
+      "archived_item_deleted",
+      archivedMatch[1]!,
+      archivedMatch[2]!,
+    );
+    return new Response(null, { status: 204 });
+  }
 
   if (
     (path === "/api/v1/categories" || path === "/api/v1/accounts") &&
@@ -690,7 +1101,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const exists = await env.DB.prepare(
         `SELECT id FROM ${table} WHERE id=? AND user_id=? AND active=1`,
       )
-        .bind(id, user.id)
+        .bind(id, workspace.dataOwnerUserId)
         .first();
       if (!exists)
         throw new ApiError(
@@ -834,7 +1245,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const record = await env.DB.prepare(
       "SELECT highlight_color,background_color,card_color,text_color,positive_color,negative_color,chart_accent_color FROM website_preferences WHERE user_id=?",
     )
-      .bind(user.id)
+      .bind(workspace.dataOwnerUserId)
       .first<Record<string, unknown>>();
     return json({ data: record ? toCamel(record) : null });
   }
@@ -863,7 +1274,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     await env.DB.prepare(
       "INSERT INTO website_preferences (user_id,highlight_color,background_color,card_color,text_color,positive_color,negative_color,chart_accent_color,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET highlight_color=excluded.highlight_color,background_color=excluded.background_color,card_color=excluded.card_color,text_color=excluded.text_color,positive_color=excluded.positive_color,negative_color=excluded.negative_color,chart_accent_color=excluded.chart_accent_color,updated_at=excluded.updated_at",
     )
-      .bind(user.id, ...colors, now)
+      .bind(workspace.dataOwnerUserId, ...colors, now)
       .run();
     return json({
       data: Object.fromEntries(
@@ -998,7 +1409,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const account = await env.DB.prepare(
         "SELECT id FROM accounts WHERE id=? AND user_id=? AND active=1",
       )
-        .bind(accountId, user.id)
+        .bind(accountId, workspace.dataOwnerUserId)
         .first();
       if (!account)
         throw new ApiError(
@@ -1048,7 +1459,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const assumptionRow = await env.DB.prepare(
       "SELECT * FROM projection_assumptions WHERE user_id=?",
     )
-      .bind(user.id)
+      .bind(workspace.dataOwnerUserId)
       .first<Record<string, number>>();
     if (!assumptionRow)
       throw new ApiError(
@@ -1127,7 +1538,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const rows = await env.DB.prepare(
       "SELECT s.*,a.name account_name,a.account_type FROM balance_snapshots s JOIN accounts a ON a.id=s.account_id AND a.user_id=s.user_id WHERE s.user_id=? ORDER BY snapshot_date,account_name",
     )
-      .bind(user.id)
+      .bind(workspace.dataOwnerUserId)
       .all();
     return json({ data: rows.results.map((row) => toCamel(row)) });
   }
@@ -1149,7 +1560,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const account = await env.DB.prepare(
       "SELECT id FROM accounts WHERE id=? AND user_id=? AND active=1",
     )
-      .bind(accountId, user.id)
+      .bind(accountId, workspace.dataOwnerUserId)
       .first();
     if (!account)
       throw new ApiError(
@@ -1162,7 +1573,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     )
       .bind(
         id,
-        user.id,
+        workspace.dataOwnerUserId,
         accountId,
         snapshotDate,
         body.balanceMinor,
@@ -1197,7 +1608,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const account = await env.DB.prepare(
       "SELECT id FROM accounts WHERE id=? AND user_id=? AND active=1",
     )
-      .bind(accountId, user.id)
+      .bind(accountId, workspace.dataOwnerUserId)
       .first();
     if (!account)
       throw new ApiError(
@@ -1216,7 +1627,7 @@ async function route(request: Request, env: Env): Promise<Response> {
           typeof body.note === "string" ? body.note.slice(0, 500) : "",
           new Date().toISOString(),
           balanceSnapshotMatch[1],
-          user.id,
+          workspace.dataOwnerUserId,
         )
         .run();
       if (!result.meta.changes)
@@ -1232,7 +1643,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const updated = await env.DB.prepare(
       "SELECT s.*,a.name account_name,a.account_type FROM balance_snapshots s JOIN accounts a ON a.id=s.account_id AND a.user_id=s.user_id WHERE s.id=? AND s.user_id=?",
     )
-      .bind(balanceSnapshotMatch[1], user.id)
+      .bind(balanceSnapshotMatch[1], workspace.dataOwnerUserId)
       .first();
     return json({ data: toCamel(updated as Record<string, unknown>) });
   }
@@ -1240,7 +1651,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const result = await env.DB.prepare(
       "DELETE FROM balance_snapshots WHERE id=? AND user_id=?",
     )
-      .bind(balanceSnapshotMatch[1], user.id)
+      .bind(balanceSnapshotMatch[1], workspace.dataOwnerUserId)
       .run();
     if (!result.meta.changes)
       throw new ApiError(404, "NOT_FOUND", "Account balance not found.");
@@ -1251,7 +1662,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const row = await env.DB.prepare(
       "SELECT * FROM projection_assumptions WHERE user_id=?",
     )
-      .bind(user.id)
+      .bind(workspace.dataOwnerUserId)
       .first<Record<string, number>>();
     if (!row)
       throw new ApiError(
@@ -1262,7 +1673,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const accountRows = await env.DB.prepare(
       "WITH latest AS (SELECT account_id,MAX(snapshot_date) d FROM balance_snapshots WHERE user_id=? GROUP BY account_id) SELECT a.*,COALESCE(s.balance_minor,0) balance_minor FROM accounts a LEFT JOIN latest l ON l.account_id=a.id LEFT JOIN balance_snapshots s ON s.account_id=l.account_id AND s.snapshot_date=l.d AND s.user_id=a.user_id WHERE a.user_id=? AND a.active=1 ORDER BY a.name",
     )
-      .bind(user.id, user.id)
+      .bind(workspace.dataOwnerUserId, workspace.dataOwnerUserId)
       .all();
     const assumptions: ProjectionAssumptions = {
       monthlyIncomeMinor: row.monthly_income_minor!,
@@ -1330,7 +1741,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       .bind(
         ...fields.map((field) => body[field]),
         new Date().toISOString(),
-        user.id,
+        workspace.dataOwnerUserId,
       )
       .run();
     return json({ data: body });
@@ -1390,7 +1801,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const matches = await env.DB.prepare(
         `SELECT amount_minor,category_id FROM transactions WHERE user_id=? AND account_id=? AND transaction_type='expense' AND amount_minor IN (${placeholders}) ORDER BY transaction_date DESC`,
       )
-        .bind(user.id, accountId, ...incomingAmounts)
+        .bind(workspace.dataOwnerUserId, accountId, ...incomingAmounts)
         .all<{ amount_minor: number; category_id: string }>();
       for (const match of matches.results)
         if (!refundCategories.has(match.amount_minor))
@@ -1460,7 +1871,7 @@ async function route(request: Request, env: Env): Promise<Response> {
           "INSERT OR IGNORE INTO transactions (id,user_id,transaction_date,category_id,account_id,vendor_name,description,amount_minor,transaction_type,transaction_direction,currency,import_id,import_fingerprint,balance_effect_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         ).bind(
           id,
-          user.id,
+          workspace.dataOwnerUserId,
           validation.data.transactionDate,
           validation.data.categoryId,
           accountId,
@@ -1484,7 +1895,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     await env.DB.prepare(
       "INSERT INTO imports (id,user_id,file_name,account_id,row_count,imported_count,duplicate_count,rejected_count,created_at) VALUES (?,?,?,?,?,0,0,0,?)",
     )
-      .bind(importId, user.id, fileName, accountId, rows.length, now)
+      .bind(
+        importId,
+        workspace.dataOwnerUserId,
+        fileName,
+        accountId,
+        rows.length,
+        now,
+      )
       .run();
     if (statements.length) {
       const results = await env.DB.batch(statements);
@@ -1497,7 +1915,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     await env.DB.prepare(
       "UPDATE imports SET imported_count=?,duplicate_count=?,rejected_count=? WHERE id=? AND user_id=?",
     )
-      .bind(accepted, duplicates, rejected, importId, user.id)
+      .bind(accepted, duplicates, rejected, importId, workspace.dataOwnerUserId)
       .run();
     return json(
       {

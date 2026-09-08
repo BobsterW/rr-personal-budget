@@ -9,6 +9,7 @@ import { ApiError, readJson } from "./http";
 export interface AuthUser {
   id: string;
   username: string;
+  platformRole: "standard" | "admin";
 }
 
 const SESSION_COOKIE = "rr_session";
@@ -117,7 +118,7 @@ export async function requireUser(
   const tokenHash = await digest(token);
   const row = await db
     .prepare(
-      "SELECT u.id,u.username,s.persistent,s.page_key_hash,s.last_used_at,s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND u.active=1",
+      "SELECT u.id,u.username,u.platform_role,s.persistent,s.page_key_hash,s.last_used_at,s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND u.active=1",
     )
     .bind(tokenHash)
     .first<
@@ -126,6 +127,7 @@ export async function requireUser(
         page_key_hash: string | null;
         last_used_at: string;
         expires_at: string;
+        platform_role: "standard" | "admin";
       }
     >();
   const now = new Date();
@@ -172,7 +174,11 @@ export async function requireUser(
       .bind(now.toISOString(), tokenHash)
       .run();
   }
-  return { id: row.id, username: row.username };
+  return {
+    id: row.id,
+    username: row.username,
+    platformRole: row.platform_role,
+  };
 }
 
 // Persist only a token digest and return the raw secret in a protected cookie.

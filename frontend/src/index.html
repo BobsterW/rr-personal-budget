@@ -8,7 +8,7 @@
       content="Private transaction, monthly spending, and net-worth tracker."
     />
     <title>R&R Budget</title>
-    <link rel="stylesheet" href="styles.css?v=7.12.0" />
+    <link rel="stylesheet" href="styles.css?v=7.13.0" />
   </head>
   <body>
     <!-- Authentication is the only visible section until /auth/me confirms a session. -->
@@ -16,7 +16,7 @@
       <div class="auth-card">
         <p class="eyebrow">Private by design</p>
         <h1>R&R Budget</h1>
-        <p>Sign in to your budget, or create a completely separate account.</p>
+        <p id="auth-slogan">Welcome to the budget that fits you.</p>
         <div class="auth-tabs" role="tablist">
           <button id="show-login" type="button">Sign in</button>
           <button id="show-register" type="button" class="secondary">
@@ -101,7 +101,9 @@
         >
           ☰
         </button>
-        <a class="brand" href="#transactions"><span>R&R</span><b>Budget</b></a>
+        <a class="brand" href="#transactions"
+          ><span id="brand-name">My</span><b>Budget</b></a
+        >
       </div>
       <nav aria-label="Primary">
         <a href="#transactions"
@@ -113,9 +115,15 @@
           ><i aria-hidden="true">⌁</i><span>Net worth</span></a
         ><a href="#settings"
           ><i aria-hidden="true">⚙</i><span>Settings</span></a
+        ><a id="admin-nav" href="#admin" hidden
+          ><i aria-hidden="true">◇</i><span>Platform admin</span></a
         >
       </nav>
       <div class="user-menu">
+        <label class="workspace-picker"
+          ><span class="sr-only">Budget</span
+          ><select id="workspace-select" aria-label="Choose budget"></select
+        ></label>
         <span class="user-avatar" aria-hidden="true">●</span
         ><span id="current-username"></span
         ><button id="logout" class="secondary">
@@ -148,6 +156,7 @@
         aria-live="polite"
         hidden
       ></div>
+      <div id="welcome-back" class="welcome-back"></div>
       <section id="transactions" class="view">
         <div class="hero">
           <div>
@@ -777,6 +786,105 @@
               </form>
             </div>
           </details>
+          <details id="workspace-access-card" class="panel settings-disclosure">
+            <summary>Budget access</summary>
+            <div class="settings-content">
+              <p class="fine-print">
+                Owners can invite an existing username as an editor or viewer.
+                Editors can update budget data; viewers only see Monthly
+                Activity and Net Worth.
+              </p>
+              <form id="member-form" class="inline-form">
+                <input
+                  name="username"
+                  placeholder="Existing username"
+                  required
+                />
+                <select name="role">
+                  <option value="editor">Editor</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+                <button>Invite</button>
+              </form>
+              <ul id="members-list" class="settings-list"></ul>
+            </div>
+          </details>
+          <details id="archived-items-card" class="panel settings-disclosure">
+            <summary>Archived items</summary>
+            <div class="settings-content">
+              <p class="fine-print">
+                Restore an item, or permanently delete it after moving its
+                references to a safe replacement.
+              </p>
+              <div id="archived-items-list"></div>
+            </div>
+          </details>
+        </div>
+      </section>
+      <section id="admin" class="view" hidden>
+        <div class="hero">
+          <div>
+            <p class="eyebrow">Platform administration</p>
+            <h1>Users & usage</h1>
+            <p>
+              Manage platform access without opening anyone's private financial
+              data.
+            </p>
+          </div>
+          <button id="member-view-button" class="secondary">Member view</button>
+        </div>
+        <div class="admin-tabs">
+          <button data-admin-tab="users">Users</button
+          ><button data-admin-tab="preview" class="secondary">
+            Access preview</button
+          ><button data-admin-tab="usage" class="secondary">Usage</button>
+        </div>
+        <div id="admin-users" class="panel admin-panel">
+          <div class="filters">
+            <label>Username<input id="admin-user-search" /></label
+            ><label
+              >Role<select id="admin-role-filter">
+                <option value="">All roles</option>
+                <option value="standard">Standard</option>
+                <option value="admin">Platform admin</option>
+              </select></label
+            ><button id="load-admin-users">Apply</button>
+          </div>
+          <div id="admin-users-list"></div>
+        </div>
+        <div id="admin-preview" class="panel admin-panel" hidden>
+          <h2>Access preview</h2>
+          <div class="access-preview-grid">
+            <article>
+              <h3>Owner</h3>
+              <p>
+                All member features plus members, ownership, export and
+                permanent deletion.
+              </p>
+            </article>
+            <article>
+              <h3>Editor</h3>
+              <p>
+                Transactions, budgets, projections, categories, accounts and
+                settings.
+              </p>
+            </article>
+            <article>
+              <h3>Viewer</h3>
+              <p>Read-only Monthly Activity and Net Worth.</p>
+            </article>
+            <article>
+              <h3>Platform admin</h3>
+              <p>
+                User roles and aggregate usage only; private budget data remains
+                inaccessible.
+              </p>
+            </article>
+          </div>
+        </div>
+        <div id="admin-usage" class="panel admin-panel" hidden>
+          <h2>Usage</h2>
+          <div id="admin-usage-cards" class="summary-grid"></div>
         </div>
       </section>
     </main>
@@ -1047,6 +1155,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.12.0"></script>
+    <script type="module" src="app.js?v=7.13.0"></script>
   </body>
 </html>

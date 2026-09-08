@@ -272,6 +272,69 @@ button {
   font-weight: 750;
   cursor: pointer;
 }
+.icon-button {
+  width: 2.65rem;
+  height: 2.65rem;
+  padding: 0.55rem;
+  display: inline-grid;
+  place-items: center;
+  vertical-align: middle;
+}
+.icon-button svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: currentColor;
+}
+.icon-button.danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.icon-button.danger:hover {
+  background: var(--danger);
+  color: white;
+}
+.welcome-back {
+  margin: 0 0 1rem;
+  font-weight: 800;
+  color: var(--green);
+}
+.workspace-picker select {
+  max-width: 100%;
+  font-size: 0.78rem;
+  padding: 0.45rem;
+  background: var(--panel);
+}
+.admin-tabs {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+.admin-user-row {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 14rem) auto auto;
+  gap: 0.8rem;
+  align-items: center;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.access-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.access-preview-grid article {
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  padding: 1rem;
+}
+.role-viewer #net-worth button[data-dialog],
+.role-viewer #net-worth .edit-balance,
+.role-viewer #net-worth .delete-balance,
+.role-viewer #net-worth .edit-projection-rule,
+.role-viewer #net-worth .delete-projection-rule {
+  display: none !important;
+}
 button:hover {
   filter: brightness(1.08);
 }
@@ -1573,6 +1636,16 @@ dialog::backdrop {
   clip: rect(0, 0, 0, 0);
 }
 @media (max-width: 800px) {
+  .admin-user-row,
+  .access-preview-grid {
+    grid-template-columns: 1fr;
+  }
+  .admin-tabs {
+    overflow-x: auto;
+  }
+  .workspace-picker {
+    width: 100%;
+  }
   .cashflow-heading,
   .cashflow-filter-grid,
   .website-colors-form {

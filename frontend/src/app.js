@@ -41,6 +41,9 @@ const state = {
   balanceSnapshots: [],
   projectionRules: [],
   websiteColors: null,
+  user: null,
+  workspaceId: null,
+  workspaceRole: null,
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -64,6 +67,12 @@ const escapeHtml = (value) =>
         char
       ],
   );
+const editIcon =
+  '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 16v4h4L19 9l-4-4L4 16Zm12-12 4 4 1-1a1.4 1.4 0 0 0 0-2l-2-2a1.4 1.4 0 0 0-2 0l-1 1Z"/></svg>';
+const trashIcon =
+  '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 21a2 2 0 0 1-2-2V7h14v12a2 2 0 0 1-2 2H7Zm1-11v8h2v-8H8Zm6 0v8h2v-8h-2ZM4 4h5l1-1h4l1 1h5v2H4V4Z"/></svg>';
+const iconButton = (kind, label, classes, data = "") =>
+  `<button class="icon-button ${kind === "trash" ? "danger " : ""}${classes}" ${data} aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${kind === "trash" ? trashIcon : editIcon}</button>`;
 const NAV_STORAGE_KEY = "rr-budget-nav-collapsed";
 const PAGE_SESSION_KEY = "rr-budget-page-session";
 const defaultWebsiteColors = {
@@ -176,6 +185,7 @@ async function api(path, options = {}) {
       headers: {
         ...(options.body ? { "content-type": "application/json" } : {}),
         ...(pageSessionKey() ? { "x-page-session": pageSessionKey() } : {}),
+        ...(state.workspaceId ? { "x-workspace-id": state.workspaceId } : {}),
         ...options.headers,
       },
     });
@@ -235,9 +245,25 @@ function showAuth(error = "") {
 
 // Populate user-owned reference data before rendering the first private view.
 async function enterApp(user) {
+  state.user = user;
+  state.workspaceId = user.workspaceId ?? user.workspaces?.[0]?.id ?? null;
+  state.workspaceRole =
+    user.workspaces?.find((item) => item.id === state.workspaceId)?.role ??
+    null;
   $("#auth-screen").hidden = true;
   $$(".app-shell").forEach((element) => (element.hidden = false));
   $("#current-username").textContent = user.username;
+  $("#brand-name").textContent = `${user.username}'s`;
+  $("#welcome-back").textContent = `Welcome back, ${user.username}.`;
+  $("#admin-nav").hidden = user.platformRole !== "admin";
+  const workspaceSelect = $("#workspace-select");
+  workspaceSelect.innerHTML = (user.workspaces ?? [])
+    .map(
+      (item) =>
+        `<option value="${escapeHtml(item.id)}" ${item.id === state.workspaceId ? "selected" : ""}>${escapeHtml(item.name)} · ${escapeHtml(item.role)}</option>`,
+    )
+    .join("");
+  applyRoleVisibility();
   let collapsed = false;
   try {
     collapsed = window.localStorage.getItem(NAV_STORAGE_KEY) === "true";
@@ -247,6 +273,27 @@ async function enterApp(user) {
   setNavigationCollapsed(collapsed);
   await Promise.all([loadLookups(), loadWebsiteColors()]);
   await showView();
+}
+function applyRoleVisibility() {
+  const viewer = state.workspaceRole === "viewer";
+  document.body.classList.toggle("role-viewer", viewer);
+  for (const id of ["transactions", "budget", "settings"]) {
+    const link = $(`#app-sidebar a[href="#${id}"]`);
+    if (link) link.hidden = viewer;
+  }
+  $("#workspace-access-card")?.toggleAttribute(
+    "hidden",
+    state.workspaceRole !== "owner",
+  );
+  $("#archived-items-card")?.toggleAttribute(
+    "hidden",
+    state.workspaceRole !== "owner",
+  );
+  if (
+    viewer &&
+    ["#transactions", "#budget", "#settings"].includes(window.location.hash)
+  )
+    window.location.hash = "spending";
 }
 // Reusable, non-blocking status message for forms and background operations.
 function notify(message, isError = false) {
@@ -336,42 +383,77 @@ function refreshTransactionCategoryOptions(type, selected = "") {
 }
 
 async function loadLookups() {
-  const [categories, accounts, masterCategories, categoryRules] =
-    await Promise.all([
-      api("/api/v1/categories"),
-      api("/api/v1/accounts"),
-      api("/api/v1/master-categories"),
-      api("/api/v1/category-rules"),
-    ]);
+  const requests = [
+    api("/api/v1/categories"),
+    api("/api/v1/accounts"),
+    api("/api/v1/master-categories"),
+  ];
+  if (state.workspaceRole !== "viewer")
+    requests.push(api("/api/v1/category-rules"));
+  const [categories, accounts, masterCategories, categoryRules = { data: [] }] =
+    await Promise.all(requests);
   state.categories = categories.data;
   state.accounts = accounts.data;
   state.masterCategories = masterCategories.data;
   state.categoryRules = categoryRules.data;
   refreshSelects();
   $("#categories-list").innerHTML = state.categories
+    .filter((item) => item.active)
     .map(
       (item) =>
-        `<li><span>${escapeHtml(item.name)} <small>(${escapeHtml(item.kind)})</small></span><span>${item.active ? `<select class="master-category-assignment" data-category-id="${escapeHtml(item.id)}"><option value="">Unassigned</option>${optionList(state.masterCategories, item.masterCategoryId)}</select> <button class="secondary danger archive" data-kind="categories" data-id="${escapeHtml(item.id)}">Archive</button>` : "<small>Archived</small>"}</span></li>`,
+        `<li><span>${escapeHtml(item.name)} <small>(${escapeHtml(item.kind)})</small></span><span><select class="master-category-assignment" data-category-id="${escapeHtml(item.id)}"><option value="">Unassigned</option>${optionList(state.masterCategories, item.masterCategoryId)}</select> ${iconButton("trash", "Archive category", "archive", `data-kind="categories" data-id="${escapeHtml(item.id)}"`)}</span></li>`,
     )
     .join("");
   $("#accounts-list").innerHTML = state.accounts
+    .filter((item) => item.active)
     .map(
       (item) =>
-        `<li><span><strong>${escapeHtml(item.name)}</strong> <small>(${escapeHtml(item.accountType)}, ${escapeHtml(item.liquidityClass ?? "liquid")})</small><br><small>Interest ${Number(item.annualInterestBps ?? 0) / 100}% · Payment ${money.format(dollars(item.paymentAmountMinor))} ${escapeHtml(item.paymentFrequency ?? "none")}</small></span><span>${item.active ? `<button class="secondary edit-account" data-id="${escapeHtml(item.id)}">Edit</button> <button class="secondary danger archive" data-kind="accounts" data-id="${escapeHtml(item.id)}">Archive</button>` : "<small>Archived</small>"}</span></li>`,
+        `<li><span><strong>${escapeHtml(item.name)}</strong> <small>(${escapeHtml(item.accountType)}, ${escapeHtml(item.liquidityClass ?? "liquid")})</small><br><small>Interest ${Number(item.annualInterestBps ?? 0) / 100}% · Payment ${money.format(dollars(item.paymentAmountMinor))} ${escapeHtml(item.paymentFrequency ?? "none")}</small></span><span>${iconButton("edit", "Edit account", "edit-account", `data-id="${escapeHtml(item.id)}"`)} ${iconButton("trash", "Archive account", "archive", `data-kind="accounts" data-id="${escapeHtml(item.id)}"`)}</span></li>`,
     )
     .join("");
   $("#master-categories-list").innerHTML = state.masterCategories
+    .filter((item) => item.active)
     .map(
       (item) =>
-        `<li><span>${escapeHtml(item.name)}</span>${item.active ? `<button class="secondary danger archive-master" data-id="${escapeHtml(item.id)}">Archive</button>` : "<small>Archived</small>"}</li>`,
+        `<li><span>${escapeHtml(item.name)}</span>${iconButton("trash", "Archive master category", "archive-master", `data-id="${escapeHtml(item.id)}"`)}</li>`,
     )
     .join("");
   $("#category-rules-list").innerHTML = state.categoryRules
+    .filter((item) => item.active)
     .map(
       (item) =>
-        `<li><span>If description contains <strong>${escapeHtml(item.pattern)}</strong> → ${escapeHtml(item.categoryName)} <small>(priority ${item.priority})</small></span>${item.active ? `<button class="secondary danger archive-rule" data-id="${escapeHtml(item.id)}">Archive</button>` : "<small>Archived</small>"}</li>`,
+        `<li><span>If description contains <strong>${escapeHtml(item.pattern)}</strong> → ${escapeHtml(item.categoryName)} <small>(priority ${item.priority})</small></span>${iconButton("trash", "Archive automatic rule", "archive-rule", `data-id="${escapeHtml(item.id)}"`)}</li>`,
     )
     .join("");
+  if (state.workspaceRole === "owner")
+    await Promise.all([loadWorkspaceAccess(), loadArchivedItems()]);
+}
+async function loadWorkspaceAccess() {
+  const result = await api("/api/v1/workspace");
+  $("#members-list").innerHTML = result.data.members
+    .map(
+      (member) =>
+        `<li><span><strong>${escapeHtml(member.username)}</strong> <small>${escapeHtml(member.role)}</small></span>${member.role === "owner" ? "<small>Owner</small>" : `<span><select class="member-role" data-user-id="${escapeHtml(member.id)}"><option value="editor" ${member.role === "editor" ? "selected" : ""}>Editor</option><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>Viewer</option></select>${iconButton("trash", "Remove member", "remove-member", `data-user-id="${escapeHtml(member.id)}"`)}</span>`}</li>`,
+    )
+    .join("");
+}
+async function loadArchivedItems() {
+  const result = await api("/api/v1/archived-items"),
+    data = result.data;
+  const categoryRows = data.categories
+    .map(
+      (item) =>
+        `<li><span>${escapeHtml(item.name)} <small>${escapeHtml(item.kind)}</small></span><span><button class="secondary restore-archived" data-archived-kind="category" data-id="${escapeHtml(item.id)}">Restore</button>${iconButton("trash", "Permanently delete category", "delete-archived", `data-archived-kind="category" data-id="${escapeHtml(item.id)}"`)}</span></li>`,
+    )
+    .join("");
+  const masterRows = data.masterCategories
+    .map(
+      (item) =>
+        `<li><span>${escapeHtml(item.name)}</span><span><button class="secondary restore-archived" data-archived-kind="master" data-id="${escapeHtml(item.id)}">Restore</button>${iconButton("trash", "Permanently delete master category", "delete-archived", `data-archived-kind="master" data-id="${escapeHtml(item.id)}"`)}</span></li>`,
+    )
+    .join("");
+  $("#archived-items-list").innerHTML =
+    `<h3>Categories</h3><ul class="settings-list">${categoryRows || "<li>No archived categories.</li>"}</ul><h3>Master categories</h3><ul class="settings-list">${masterRows || "<li>No archived master categories.</li>"}</ul>`;
 }
 async function loadTransactions() {
   const params = new URLSearchParams({
@@ -405,7 +487,7 @@ async function loadTransactions() {
       const signedMinor =
         direction === "credit" ? item.amountMinor : -item.amountMinor;
       const selected = state.selectedTransactionIds.has(item.id);
-      return `<tr class="transaction-${direction} ${selected ? "bulk-selected" : ""}" data-transaction-row="${escapeHtml(item.id)}"><td class="bulk-select-column" data-label="Select" ${state.bulkEditMode ? "" : "hidden"}><input class="transaction-select" type="checkbox" data-id="${escapeHtml(item.id)}" aria-label="Select ${escapeHtml(item.vendorName)}" ${selected ? "checked" : ""}/></td><td data-label="Date">${escapeHtml(item.transactionDate)}</td><td data-label="Vendor"><strong>${escapeHtml(item.vendorName)}</strong>${item.description ? `<br><small>${escapeHtml(item.description)}</small>` : ""}</td><td data-label="Category">${escapeHtml(item.categoryName)}</td><td data-label="Account">${escapeHtml(item.accountName)}</td><td data-label="Type"><span class="pill">${escapeHtml(item.transactionType)}</span></td><td data-label="Amount" class="money signed-amount">${signedMinor > 0 ? "+" : "−"}${money.format(Math.abs(dollars(signedMinor)))}</td><td data-label="Actions" class="transaction-actions"><button class="secondary edit-transaction" data-id="${escapeHtml(item.id)}">Edit</button> <button class="secondary danger delete-transaction" data-id="${escapeHtml(item.id)}">Delete</button></td></tr>`;
+      return `<tr class="transaction-${direction} ${selected ? "bulk-selected" : ""}" data-transaction-row="${escapeHtml(item.id)}"><td class="bulk-select-column" data-label="Select" ${state.bulkEditMode ? "" : "hidden"}><input class="transaction-select" type="checkbox" data-id="${escapeHtml(item.id)}" aria-label="Select ${escapeHtml(item.vendorName)}" ${selected ? "checked" : ""}/></td><td data-label="Date">${escapeHtml(item.transactionDate)}</td><td data-label="Vendor"><strong>${escapeHtml(item.vendorName)}</strong>${item.description ? `<br><small>${escapeHtml(item.description)}</small>` : ""}</td><td data-label="Category">${escapeHtml(item.categoryName)}</td><td data-label="Account">${escapeHtml(item.accountName)}</td><td data-label="Type"><span class="pill">${escapeHtml(item.transactionType)}</span></td><td data-label="Amount" class="money signed-amount">${signedMinor > 0 ? "+" : "−"}${money.format(Math.abs(dollars(signedMinor)))}</td><td data-label="Actions" class="transaction-actions">${iconButton("edit", "Edit transaction", "edit-transaction", `data-id="${escapeHtml(item.id)}"`)} ${iconButton("trash", "Delete transaction", "delete-transaction", `data-id="${escapeHtml(item.id)}"`)}</td></tr>`;
     })
     .join("");
   $("#transactions-empty").hidden = state.transactions.length > 0;
@@ -505,6 +587,18 @@ const chartColors = [
   "#6f7f2c",
   "#7a5d3b",
 ];
+// Series keep the same color when filters or ordering change. Income and
+// expense use separate halves of the palette so adjacent areas stay distinct.
+function stableSeriesColor(id, kind = "income") {
+  let hash = 2166136261;
+  for (const char of `${kind}:${id}`) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  const half = Math.floor(chartColors.length / 2),
+    offset = kind === "expense" ? half : 0;
+  return chartColors[offset + (Math.abs(hash) % half)];
+}
 const masterKey = (value) => value || "unassigned";
 const polarPoint = (angle, radius, center = 110) => ({
   x: center + Math.cos(angle - Math.PI / 2) * radius,
@@ -919,10 +1013,10 @@ function drawCashFlowChart() {
         `<line class="chart-grid ${ratio === 0 ? "cashflow-zero" : ""}" x1="${plot.left}" y1="${y(bound * ratio)}" x2="${plot.right}" y2="${y(bound * ratio)}"/><text class="axis-label y-axis-label" x="${plot.left - 10}" y="${y(bound * ratio) + 4}">${compactMoney(bound * ratio)}</text>`,
     )
     .join("");
-  const buildLayers = (rows, direction, colorOffset) => {
+  const buildLayers = (rows, direction) => {
     let lower = Array(count).fill(0);
     return rows
-      .map((row, index) => {
+      .map((row) => {
         const delta = row.values.map(
           (value) => Math.max(0, Number(value ?? 0)) * direction,
         );
@@ -932,7 +1026,10 @@ function drawCashFlowChart() {
             ? direction > 0
               ? "var(--positive)"
               : "var(--danger)"
-            : chartColors[(index + colorOffset) % chartColors.length];
+            : stableSeriesColor(
+                row.id ?? row.name,
+                direction > 0 ? "income" : "expense",
+              );
         const markup = `<path class="cashflow-area" style="fill:${color}" d="${area(lower, upper)}"><title>${escapeHtml(row.name)}</title></path>`;
         lower = upper;
         return markup;
@@ -947,9 +1044,7 @@ function drawCashFlowChart() {
     state.cashFlowColorBy === "type"
       ? [{ name: "Expenses", values: expenseTotals }]
       : expenseRows;
-  const areas =
-    buildLayers(displayIncome, 1, 0) +
-    buildLayers(displayExpense, -1, Math.max(1, displayIncome.length));
+  const areas = buildLayers(displayIncome, 1) + buildLayers(displayExpense, -1);
   const guides = data.months
     .map(
       (month, index) =>
@@ -971,8 +1066,8 @@ function drawCashFlowChart() {
       ? `<span class="income-key">Actual income</span><span class="expense-key">Actual expenses</span><span class="cash-key">Actual cash flow</span><span class="income-budget-key">Income budget</span><span class="expense-budget-key">Expense budget</span><span class="net-budget-key">Budgeted cash flow</span>`
       : [...incomeRows, ...expenseRows]
           .map(
-            (row, index) =>
-              `<span><i style="background:${chartColors[index % chartColors.length]}"></i>${escapeHtml(row.name)}</span>`,
+            (row) =>
+              `<span><i style="background:${stableSeriesColor(row.id ?? row.name, incomeRows.includes(row) ? "income" : "expense")}"></i>${escapeHtml(row.name)}</span>`,
           )
           .join("") + `<span class="cash-key">Cash flow</span>`;
   $("#cashflow-chart").innerHTML =
@@ -1398,7 +1493,15 @@ function renderAccountNetWorthChart() {
   showNetWorthAccountDetail(accounts[0].id, points.length - 1);
 }
 async function showView() {
-  const id = window.location.hash.slice(1) || "transactions";
+  let id =
+    window.location.hash.slice(1) ||
+    (state.workspaceRole === "viewer" ? "spending" : "transactions");
+  if (
+    state.workspaceRole === "viewer" &&
+    ["transactions", "budget", "settings"].includes(id)
+  )
+    id = "spending";
+  if (id === "admin" && state.user?.platformRole !== "admin") id = "spending";
   $$(".view").forEach((view) => {
     view.hidden = view.id !== id;
   });
@@ -1412,7 +1515,29 @@ async function showView() {
     if (id === "budget") await loadBudget();
     if (id === "net-worth") await loadNetWorth();
     if (id === "settings") await loadLookups();
+    if (id === "admin") await loadAdminUsers();
   });
+}
+
+async function loadAdminUsers() {
+  const params = new URLSearchParams();
+  if ($("#admin-user-search").value)
+    params.set("search", $("#admin-user-search").value);
+  if ($("#admin-role-filter").value)
+    params.set("role", $("#admin-role-filter").value);
+  const result = await api(`/api/v1/platform/users?${params}`);
+  $("#admin-users-list").innerHTML = result.data
+    .map(
+      (item) =>
+        `<div class="admin-user-row"><strong>${escapeHtml(item.username)}</strong><select data-admin-role="${escapeHtml(item.id)}"><option value="standard" ${item.platformRole === "standard" ? "selected" : ""}>Standard</option><option value="admin" ${item.platformRole === "admin" ? "selected" : ""}>Platform admin</option></select><label><input type="checkbox" data-admin-active="${escapeHtml(item.id)}" ${item.active ? "checked" : ""}/> Active</label><button data-save-admin-user="${escapeHtml(item.id)}">Save</button></div>`,
+    )
+    .join("");
+}
+async function loadAdminUsage() {
+  const result = await api("/api/v1/platform/usage"),
+    data = result.data;
+  $("#admin-usage-cards").innerHTML =
+    `<article><span>Active users</span><strong>${Number(data.totalUsers ?? 0)}</strong></article><article><span>Average sign-ins per user (30 days)</span><strong>${Number(data.averageUsesPerUser ?? 0)}</strong></article><article><span>Average transactions per user</span><strong>${Number(data.averageTransactionsPerUser ?? 0)}</strong></article>`;
 }
 
 function parseCsv(text) {
@@ -2623,6 +2748,165 @@ $("#logout").addEventListener("click", () => {
     }
   })();
 });
+$("#workspace-select").addEventListener("change", async (event) => {
+  state.workspaceId = event.target.value;
+  state.workspaceRole =
+    state.user.workspaces.find((item) => item.id === state.workspaceId)?.role ??
+    null;
+  state.categories = [];
+  state.accounts = [];
+  state.netWorthSelectionInitialized = false;
+  applyRoleVisibility();
+  await run(async () => {
+    await loadLookups();
+    await showView();
+  });
+});
+$("#member-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formElement = event.currentTarget;
+  void run(async () => {
+    await api("/api/v1/workspace/members", {
+      method: "POST",
+      body: JSON.stringify(Object.fromEntries(new FormData(formElement))),
+    });
+    formElement.reset();
+    await loadWorkspaceAccess();
+    notify("Budget member added.");
+  });
+});
+$("#load-admin-users").addEventListener(
+  "click",
+  () => void run(loadAdminUsers),
+);
+$("#member-view-button").addEventListener("click", () => {
+  window.location.hash = "transactions";
+});
+document.addEventListener("click", (event) => {
+  const target = event.target.closest?.("button");
+  if (!target) return;
+  if (target.dataset.adminTab) {
+    $$(".admin-panel").forEach(
+      (panel) =>
+        (panel.hidden = panel.id !== `admin-${target.dataset.adminTab}`),
+    );
+    $$("[data-admin-tab]").forEach((button) =>
+      button.classList.toggle("secondary", button !== target),
+    );
+    if (target.dataset.adminTab === "usage") void run(loadAdminUsage);
+    return;
+  }
+  if (target.dataset.saveAdminUser)
+    void run(async () => {
+      const id = target.dataset.saveAdminUser;
+      await api(`/api/v1/platform/users/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          platformRole: $(`[data-admin-role="${id}"]`).value,
+          active: $(`[data-admin-active="${id}"]`).checked,
+        }),
+      });
+      notify("Platform user updated.");
+      await loadAdminUsers();
+    });
+  if (target.classList.contains("restore-archived"))
+    void run(async () => {
+      await api(
+        `/api/v1/archived-items/${target.dataset.archivedKind}/${target.dataset.id}`,
+        { method: "POST" },
+      );
+      await loadLookups();
+      notify("Item restored.");
+    });
+  if (target.classList.contains("delete-archived"))
+    void run(async () => {
+      const kind = target.dataset.archivedKind;
+      let replacementId = null;
+      if (kind === "category") {
+        const source = state.categories.find(
+          (item) => item.id === target.dataset.id,
+        );
+        const choices = state.categories.filter(
+          (item) => item.active && item.kind === source?.kind,
+        );
+        const name = window.prompt(
+          `Move existing references to which ${source?.kind} category?\n${choices.map((item) => item.name).join(", ")}`,
+          choices.find((item) =>
+            item.name.toLowerCase().startsWith("uncategorized"),
+          )?.name ??
+            choices[0]?.name ??
+            "",
+        );
+        if (!name) return;
+        replacementId = choices.find(
+          (item) => item.name.toLowerCase() === name.trim().toLowerCase(),
+        )?.id;
+        if (!replacementId)
+          throw new Error("Choose one of the listed replacement categories.");
+      } else {
+        const choices = state.masterCategories.filter((item) => item.active);
+        const name = window.prompt(
+          `Move child categories to which master category? Leave blank to make them unassigned.\n${choices.map((item) => item.name).join(", ")}`,
+          "",
+        );
+        if (name)
+          replacementId = choices.find(
+            (item) => item.name.toLowerCase() === name.trim().toLowerCase(),
+          )?.id;
+        if (name && !replacementId)
+          throw new Error("Choose one of the listed master categories.");
+      }
+      if (
+        !confirm(
+          "Permanently delete this archived item? This cannot be undone.",
+        )
+      )
+        return;
+      await api(`/api/v1/archived-items/${kind}/${target.dataset.id}`, {
+        method: "DELETE",
+        body: JSON.stringify({ replacementId }),
+      });
+      await loadLookups();
+      notify("Archived item permanently deleted.");
+    });
+  if (
+    target.classList.contains("remove-member") &&
+    confirm("Remove this member from this budget?")
+  )
+    void run(async () => {
+      await api(`/api/v1/workspace/members/${target.dataset.userId}`, {
+        method: "DELETE",
+      });
+      await loadWorkspaceAccess();
+      notify("Member removed.");
+    });
+});
+document.addEventListener("change", (event) => {
+  if (event.target.classList.contains("member-role"))
+    void run(async () => {
+      await api(`/api/v1/workspace/members/${event.target.dataset.userId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role: event.target.value }),
+      });
+      await loadWorkspaceAccess();
+      notify("Member role updated.");
+    });
+});
+
+const slogans = [
+  "Welcome to the budget that fits you.",
+  "Every dollar has a story. Make yours intentional.",
+  "Clear numbers. Confident decisions.",
+  "Your money, organized around your life.",
+];
+let sloganIndex = 0;
+if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+  window.setInterval(() => {
+    if (!$("#auth-screen").hidden) {
+      sloganIndex = (sloganIndex + 1) % slogans.length;
+      $("#auth-slogan").textContent = slogans[sloganIndex];
+    }
+  }, 5000);
 $("#settings").addEventListener(
   "toggle",
   (event) => {

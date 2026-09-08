@@ -1,6 +1,15 @@
-# R&R Budget v7.12
+# R&R Budget v7.13
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.13 changes
+
+- Private budget workspaces with Owner, Editor, and Viewer roles.
+- Separate Standard and Platform Admin roles; BobbyW is the bootstrap admin.
+- Platform admin users, access-preview, and aggregate-usage dashboard.
+- Archive restoration and owner-only permanent deletion with safe reassignment.
+- Stable Cash Flow series colors, personalized branding, rotating welcome lines,
+  and accessible pencil/trash action icons.
 
 ## V7.12 changes
 
