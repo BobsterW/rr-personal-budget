@@ -1,4 +1,4 @@
-# V7.13 code walkthrough
+# V7.13.1 code walkthrough
 
 This guide explains how the application works from the browser down to Cloudflare D1. Read it beside the source files. The inline comments identify important implementation boundaries; this guide explains how those boundaries connect.
 
@@ -252,7 +252,8 @@ Migrations are applied in numerical order and should never be edited after produ
 - `0003`: account-specific projection columns.
 - `0004`: master categories, category rules, and fixed/liquid classification.
 - `0005`: uncategorized fallback rows.
-- `0006`: signed transaction balance effects and future purchases.
+- `0006`: signed transaction balance effects and the historical future-purchase table.
+- `0014`: removes that superseded table and adds pending workspace invitations.
 - `0007`: users, sessions, rate-limit attempts, and full tenant-aware table rebuild.
 - `0008`: debit/credit transaction direction plus an index for signed reports.
 - `0009`: recurring account-aware projection rules with tenant-safe account

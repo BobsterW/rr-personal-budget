@@ -10,7 +10,7 @@
   --positive: #185b45;
   --chart-accent: #16211d;
   --shadow: 0 14px 40px rgba(22, 33, 29, 0.08);
-  --sidebar-width: 248px;
+  --sidebar-width: 272px;
   --sidebar-collapsed: 78px;
   font-family:
     Inter,
@@ -50,11 +50,13 @@ body {
   transition:
     width 180ms ease,
     transform 180ms ease;
+  overflow: hidden;
 }
 .sidebar-heading {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 .nav-toggle {
   min-width: 44px;
@@ -69,12 +71,13 @@ body {
   font-weight: 800;
   color: var(--ink);
   text-decoration: none;
+  min-width: 0;
+  white-space: nowrap;
 }
 .brand span {
-  background: var(--green);
-  color: #fff;
-  border-radius: 8px;
-  padding: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--green);
 }
 .topbar nav {
   display: flex;
@@ -103,7 +106,8 @@ body {
   background: rgba(24, 91, 69, 0.09);
 }
 .user-menu {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   font-size: 0.82rem;
@@ -115,6 +119,10 @@ body {
 }
 .user-menu button {
   margin-left: auto;
+}
+.workspace-picker {
+  grid-column: 1 / -1;
+  width: 100%;
 }
 .mobile-nav-toggle {
   display: none;
@@ -201,7 +209,7 @@ body {
 }
 main {
   max-width: none;
-  width: auto;
+  width: calc(100% - var(--sidebar-width));
   margin-left: var(--sidebar-width);
   padding: 40px 24px 80px;
   transition: margin-left 180ms ease;
@@ -216,18 +224,21 @@ body.nav-collapsed .topbar {
 }
 body.nav-collapsed main {
   margin-left: var(--sidebar-collapsed);
+  width: calc(100% - var(--sidebar-collapsed));
 }
-body.nav-collapsed .brand b,
+body.nav-collapsed .brand,
 body.nav-collapsed .topbar nav a span,
 body.nav-collapsed #current-username,
 body.nav-collapsed #logout span,
-body.nav-collapsed .user-avatar {
+body.nav-collapsed .user-avatar,
+body.nav-collapsed .workspace-picker {
   display: none;
 }
 body.nav-collapsed .topbar nav a,
 body.nav-collapsed .sidebar-heading,
 body.nav-collapsed .user-menu {
   justify-content: center;
+  display: flex;
 }
 body.nav-collapsed #logout {
   margin: 0;
@@ -300,10 +311,37 @@ button {
   color: var(--green);
 }
 .workspace-picker select {
+  width: 100%;
   max-width: 100%;
   font-size: 0.78rem;
   padding: 0.45rem;
   background: var(--panel);
+}
+.invitation-banner {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 auto 1rem;
+  max-width: 1180px;
+}
+.invitation-banner article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid color-mix(in srgb, var(--green) 35%, var(--line));
+  border-radius: 1rem;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.invitation-banner p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+.invitation-banner article > div:last-child {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 .admin-tabs {
   display: flex;
@@ -1668,17 +1706,21 @@ dialog::backdrop {
   body.nav-open .topbar {
     transform: translateX(0);
   }
-  body.nav-collapsed .brand b,
+  body.nav-collapsed .brand,
   body.nav-collapsed .topbar nav a span,
   body.nav-collapsed #current-username,
   body.nav-collapsed #logout span,
   body.nav-collapsed .user-avatar {
     display: inline;
   }
+  body.nav-collapsed .workspace-picker {
+    display: block;
+  }
   body.nav-collapsed .topbar nav a,
   body.nav-collapsed .sidebar-heading,
   body.nav-collapsed .user-menu {
     justify-content: flex-start;
+    display: grid;
   }
   body.nav-collapsed #logout {
     margin-left: auto;
@@ -1699,7 +1741,12 @@ dialog::backdrop {
   main,
   body.nav-collapsed main {
     margin-left: 0;
+    width: 100%;
     padding: 74px 14px 70px;
+  }
+  .invitation-banner article {
+    align-items: stretch;
+    flex-direction: column;
   }
   .hero {
     align-items: flex-start;

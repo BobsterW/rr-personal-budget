@@ -271,7 +271,7 @@ async function enterApp(user) {
     // Storage can be unavailable in private modes; the expanded menu is safe.
   }
   setNavigationCollapsed(collapsed);
-  await Promise.all([loadLookups(), loadWebsiteColors()]);
+  await Promise.all([loadLookups(), loadWebsiteColors(), loadInvitations()]);
   await showView();
 }
 function applyRoleVisibility() {
@@ -434,6 +434,25 @@ async function loadWorkspaceAccess() {
     .map(
       (member) =>
         `<li><span><strong>${escapeHtml(member.username)}</strong> <small>${escapeHtml(member.role)}</small></span>${member.role === "owner" ? "<small>Owner</small>" : `<span><select class="member-role" data-user-id="${escapeHtml(member.id)}"><option value="editor" ${member.role === "editor" ? "selected" : ""}>Editor</option><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>Viewer</option></select>${iconButton("trash", "Remove member", "remove-member", `data-user-id="${escapeHtml(member.id)}"`)}</span>`}</li>`,
+    )
+    .join("");
+  $("#pending-invitations-list").innerHTML = result.data.invitations.length
+    ? result.data.invitations
+        .map(
+          (invitation) =>
+            `<li><span><strong>${escapeHtml(invitation.username)}</strong> <small>${escapeHtml(invitation.role)} · expires ${escapeHtml(new Date(invitation.expiresAt).toLocaleDateString("en-CA"))}</small></span><span><button class="secondary resend-invitation" data-id="${escapeHtml(invitation.id)}">Resend</button> ${iconButton("trash", "Cancel invitation", "cancel-invitation", `data-id="${escapeHtml(invitation.id)}"`)}</span></li>`,
+        )
+        .join("")
+    : "<li><small>No pending invitations.</small></li>";
+}
+async function loadInvitations() {
+  const result = await api("/api/v1/invitations"),
+    banner = $("#invitation-banner");
+  banner.hidden = !result.data.length;
+  banner.innerHTML = result.data
+    .map(
+      (invitation) =>
+        `<article><div><strong>${escapeHtml(invitation.inviterUsername)} invited you to ${escapeHtml(invitation.workspaceName)}</strong><p>Access: ${escapeHtml(invitation.role)} · expires ${escapeHtml(new Date(invitation.expiresAt).toLocaleDateString("en-CA"))}</p></div><div><button class="accept-invitation" data-id="${escapeHtml(invitation.id)}">Accept invitation</button><button class="secondary decline-invitation" data-id="${escapeHtml(invitation.id)}">Decline</button></div></article>`,
     )
     .join("");
 }
@@ -2772,7 +2791,7 @@ $("#member-form").addEventListener("submit", (event) => {
     });
     formElement.reset();
     await loadWorkspaceAccess();
-    notify("Budget member added.");
+    notify("Invitation sent if that username is eligible.");
   });
 });
 $("#load-admin-users").addEventListener(
@@ -2879,6 +2898,42 @@ document.addEventListener("click", (event) => {
       });
       await loadWorkspaceAccess();
       notify("Member removed.");
+    });
+  if (
+    target.classList.contains("accept-invitation") ||
+    target.classList.contains("decline-invitation")
+  )
+    void run(async () => {
+      const action = target.classList.contains("accept-invitation")
+        ? "accept"
+        : "decline";
+      await api(`/api/v1/invitations/${target.dataset.id}/${action}`, {
+        method: "POST",
+      });
+      const session = await api("/api/v1/auth/me");
+      await enterApp(session.data);
+      notify(
+        action === "accept" ? "Invitation accepted." : "Invitation declined.",
+      );
+    });
+  if (target.classList.contains("resend-invitation"))
+    void run(async () => {
+      await api(`/api/v1/workspace/invitations/${target.dataset.id}/resend`, {
+        method: "POST",
+      });
+      await loadWorkspaceAccess();
+      notify("Invitation renewed for seven days.");
+    });
+  if (
+    target.classList.contains("cancel-invitation") &&
+    window.confirm("Cancel this invitation?")
+  )
+    void run(async () => {
+      await api(`/api/v1/workspace/invitations/${target.dataset.id}`, {
+        method: "DELETE",
+      });
+      await loadWorkspaceAccess();
+      notify("Invitation cancelled.");
     });
 });
 document.addEventListener("change", (event) => {

@@ -31,11 +31,6 @@ export interface TimelineEffect {
   date: string;
   effectMinor: number;
 }
-export interface TimelinePurchase {
-  accountId: string;
-  date: string;
-  amountMinor: number;
-}
 export interface TimelinePoint {
   date: string;
   phase: "actual" | "projected";
@@ -196,13 +191,12 @@ function applyProjectionRules(
   }
 }
 
-// Emit actual points through today, then compound accounts and apply planned
-// purchases/contributions to each future monthly point.
+// Emit actual points through today, then compound accounts and apply explicit
+// projection rules to each future monthly point.
 export function buildNetWorthTimeline(
   accounts: TimelineAccount[],
   snapshots: TimelineSnapshot[],
   effects: TimelineEffect[],
-  purchases: TimelinePurchase[],
   _assumptions: ProjectionAssumptions,
   startDate: string,
   endDate: string,
@@ -249,7 +243,7 @@ export function buildNetWorthTimeline(
         account.accountType === "credit_card" ||
         value < 0;
       // V7.2 intentionally removes asset growth and depreciation assumptions.
-      // Assets change through explicit payments, equity, dividends and purchases;
+      // Assets change through explicit projection rules, equity, and dividends;
       // liabilities may still accrue their configured interest.
       const annualRate = liability ? account.annualInterestBps : 0;
       value *= Math.pow(1 + annualRate / 10_000, months / 12);
@@ -261,13 +255,6 @@ export function buildNetWorthTimeline(
           (months / 12);
       balances.set(account.id, value);
     }
-    for (const purchase of purchases.filter(
-      (item) => item.date > previous && item.date <= date,
-    ))
-      balances.set(
-        purchase.accountId,
-        (balances.get(purchase.accountId) ?? 0) - purchase.amountMinor,
-      );
     // Recurring income, expenses, transfers, and debt payments now affect the
     // selected real accounts instead of an invented projected-cash-flow layer.
     applyProjectionRules(balances, projectionRules, previous, date);

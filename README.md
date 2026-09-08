@@ -1,6 +1,15 @@
-# R&R Budget v7.13
+# R&R Budget v7.13.1
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.13.1 changes
+
+- Removes the superseded Future Purchases table, data, routes, and projection
+  path; one-time Projection Rules now cover future purchases.
+- Repairs the desktop sidebar's expanded/collapsed layout and hides the budget
+  switcher while collapsed.
+- Replaces immediate workspace access with seven-day pending invitations that
+  recipients can accept or decline.
 
 ## V7.13 changes
 
@@ -178,7 +187,7 @@ For a detailed, file-by-file explanation, read [`CODE_WALKTHROUGH.md`](CODE_WALK
 
 - `users`: display username, unique normalized username, bcrypt password hash, and account status.
 - `sessions`: random login sessions; D1 stores only the SHA-256 token hash. The raw token is sent only in an `HttpOnly` cookie.
-- Every financial table carries `user_id`. Accounts, categories, master categories, imports, transactions, balance snapshots, category rules, projection assumptions, and future purchases are user-owned.
+- Every financial table carries `user_id`. Accounts, categories, master categories, imports, transactions, balance snapshots, category rules, projection assumptions, and projection rules are user-owned.
 - Composite foreign keys such as `(account_id,user_id)` prevent a record from referencing another user's account even if application code makes a mistake.
 - Names and import fingerprints are unique within a user rather than globally, so different users can use the same category and account names.
 - Existing V5 data is preserved under a disabled `legacy-v5-owner` during migration. Assign it deliberately before removing that disabled record.
@@ -278,7 +287,6 @@ All routes are under `/api/v1`:
 - `GET|POST /balance-snapshots`
 - `GET|PUT /projection`
 - `GET /net-worth-timeline?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD`
-- `GET|POST /future-purchases`; `DELETE /future-purchases/:id`
 - `POST /imports` accepts a validated batch from the CSV preview
 
 Errors use `{ "error": { "code", "message", "details?", "requestId" } }`. Request bodies are limited to 1 MB, and imports to 500 rows per request.

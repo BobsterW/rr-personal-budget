@@ -512,44 +512,36 @@ export class BudgetRepository {
   }
 
   async timelineData() {
-    const [accounts, snapshots, effects, purchases, projectionRules] =
-      await Promise.all([
-        this.db
-          .prepare(
-            "SELECT * FROM accounts WHERE active=1 AND user_id=? ORDER BY name",
-          )
-          .bind(this.userId)
-          .all(),
-        this.db
-          .prepare(
-            "SELECT account_id,snapshot_date,balance_minor FROM balance_snapshots WHERE user_id=? ORDER BY snapshot_date",
-          )
-          .bind(this.userId)
-          .all(),
-        this.db
-          .prepare(
-            "SELECT account_id,transaction_date,balance_effect_minor FROM transactions WHERE balance_effect_minor IS NOT NULL AND user_id=? ORDER BY transaction_date",
-          )
-          .bind(this.userId)
-          .all(),
-        this.db
-          .prepare(
-            "SELECT * FROM future_purchases WHERE user_id=? ORDER BY purchase_date,description",
-          )
-          .bind(this.userId)
-          .all(),
-        this.db
-          .prepare(
-            "SELECT * FROM projection_rules WHERE user_id=? AND active=1 ORDER BY start_date,description",
-          )
-          .bind(this.userId)
-          .all(),
-      ]);
+    const [accounts, snapshots, effects, projectionRules] = await Promise.all([
+      this.db
+        .prepare(
+          "SELECT * FROM accounts WHERE active=1 AND user_id=? ORDER BY name",
+        )
+        .bind(this.userId)
+        .all(),
+      this.db
+        .prepare(
+          "SELECT account_id,snapshot_date,balance_minor FROM balance_snapshots WHERE user_id=? ORDER BY snapshot_date",
+        )
+        .bind(this.userId)
+        .all(),
+      this.db
+        .prepare(
+          "SELECT account_id,transaction_date,balance_effect_minor FROM transactions WHERE balance_effect_minor IS NOT NULL AND user_id=? ORDER BY transaction_date",
+        )
+        .bind(this.userId)
+        .all(),
+      this.db
+        .prepare(
+          "SELECT * FROM projection_rules WHERE user_id=? AND active=1 ORDER BY start_date,description",
+        )
+        .bind(this.userId)
+        .all(),
+    ]);
     return {
       accounts: accounts.results,
       snapshots: snapshots.results,
       effects: effects.results,
-      purchases: purchases.results,
       projectionRules: projectionRules.results,
     };
   }
@@ -648,56 +640,6 @@ export class BudgetRepository {
       .bind(new Date().toISOString(), id, this.userId)
       .run();
     return Number(result.meta.changes ?? 0) > 0;
-  }
-
-  async listFuturePurchases() {
-    return (
-      await this.db
-        .prepare(
-          "SELECT p.*,a.name account_name FROM future_purchases p JOIN accounts a ON a.id=p.account_id AND a.user_id=p.user_id WHERE p.user_id=? ORDER BY purchase_date,description",
-        )
-        .bind(this.userId)
-        .all()
-    ).results;
-  }
-
-  async createFuturePurchase(
-    description: string,
-    amountMinor: number,
-    purchaseDate: string,
-    accountId: string,
-  ) {
-    const id = crypto.randomUUID(),
-      now = new Date().toISOString();
-    await this.db
-      .prepare(
-        "INSERT INTO future_purchases (id,user_id,description,amount_minor,purchase_date,account_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
-      )
-      .bind(
-        id,
-        this.userId,
-        description,
-        amountMinor,
-        purchaseDate,
-        accountId,
-        now,
-        now,
-      )
-      .run();
-    return this.db
-      .prepare(
-        "SELECT p.*,a.name account_name FROM future_purchases p JOIN accounts a ON a.id=p.account_id AND a.user_id=p.user_id WHERE p.id=? AND p.user_id=?",
-      )
-      .bind(id, this.userId)
-      .first();
-  }
-
-  async deleteFuturePurchase(id: string) {
-    const result = await this.db
-      .prepare("DELETE FROM future_purchases WHERE id=? AND user_id=?")
-      .bind(id, this.userId)
-      .run();
-    return result.meta.changes > 0;
   }
 
   // Filter values are bound parameters. Sort SQL comes only from an allowlist.

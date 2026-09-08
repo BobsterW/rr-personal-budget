@@ -8,7 +8,7 @@
       content="Private transaction, monthly spending, and net-worth tracker."
     />
     <title>R&R Budget</title>
-    <link rel="stylesheet" href="styles.css?v=7.13.0" />
+    <link rel="stylesheet" href="styles.css?v=7.13.1" />
   </head>
   <body>
     <!-- Authentication is the only visible section until /auth/me confirms a session. -->
@@ -157,6 +157,12 @@
         hidden
       ></div>
       <div id="welcome-back" class="welcome-back"></div>
+      <section
+        id="invitation-banner"
+        class="invitation-banner"
+        aria-label="Budget invitations"
+        hidden
+      ></section>
       <section id="transactions" class="view">
         <div class="hero">
           <div>
@@ -806,6 +812,9 @@
                 </select>
                 <button>Invite</button>
               </form>
+              <h3>Pending invitations</h3>
+              <ul id="pending-invitations-list" class="settings-list"></ul>
+              <h3>Current members</h3>
               <ul id="members-list" class="settings-list"></ul>
             </div>
           </details>
@@ -1155,6 +1164,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.13.0"></script>
+    <script type="module" src="app.js?v=7.13.1"></script>
   </body>
 </html>

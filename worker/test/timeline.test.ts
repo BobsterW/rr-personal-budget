@@ -43,16 +43,28 @@ describe("net-worth timeline", () => {
     expect(balanceAt("2026-07-31", "cash", snapshots, effects)).toBe(120_000);
   });
 
-  it("marks today and deducts a planned purchase from future liquid net worth", () => {
+  it("marks today and deducts a one-time projection rule", () => {
     const points = buildNetWorthTimeline(
       accounts,
       [{ accountId: "cash", date: "2026-08-20", balanceMinor: 100_000 }],
       [],
-      [{ accountId: "cash", date: "2026-09-15", amountMinor: 25_000 }],
       assumptions,
       "2026-08-01",
       "2026-10-01",
       "2026-08-20",
+      [
+        {
+          id: "purchase",
+          description: "One-time purchase",
+          ruleType: "expense",
+          amountMinor: 25_000,
+          frequency: "once",
+          startDate: "2026-09-15",
+          endDate: null,
+          fromAccountId: "cash",
+          toAccountId: null,
+        },
+      ],
     );
     expect(points.find((point) => point.date === "2026-08-20")).toMatchObject({
       phase: "actual",
@@ -81,7 +93,6 @@ describe("net-worth timeline", () => {
         { accountId: "cash", date: "2026-08-20", balanceMinor: 100_000 },
         { accountId: "savings", date: "2026-08-20", balanceMinor: 50_000 },
       ],
-      [],
       [],
       assumptions,
       "2026-08-20",
@@ -129,7 +140,6 @@ describe("net-worth timeline", () => {
     const points = buildNetWorthTimeline(
       accounts,
       [{ accountId: "cash", date: "2026-01-01", balanceMinor: 5_000_000 }],
-      [],
       [],
       assumptions,
       "2026-01-01",
@@ -180,7 +190,6 @@ describe("net-worth timeline", () => {
       growingAccount,
       [{ accountId: "cash", date: "2027-12-15", balanceMinor: 50_000_000 }],
       [],
-      [],
       assumptions,
       "2026-09-01",
       "2028-12-15",
@@ -201,7 +210,6 @@ describe("net-worth timeline", () => {
         { accountId: "cash", date: "2026-10-15", balanceMinor: 250_000 },
         { accountId: "cash", date: "2026-11-15", balanceMinor: 400_000 },
       ],
-      [],
       [],
       assumptions,
       "2026-09-01",

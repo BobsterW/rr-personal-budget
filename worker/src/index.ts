@@ -596,6 +596,65 @@ async function route(request: Request, env: Env): Promise<Response> {
     throw new ApiError(404, "NOT_FOUND", "Platform route not found.");
   }
 
+  // Invitations are addressed to the signed-in user, so they are resolved
+  // before selecting a workspace the recipient does not yet belong to.
+  if (path === "/api/v1/invitations" && method === "GET") {
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "UPDATE workspace_invitations SET status='expired',updated_at=? WHERE invited_user_id=? AND status='pending' AND expires_at<=?",
+    )
+      .bind(now, user.id, now)
+      .run();
+    const rows = await env.DB.prepare(
+      "SELECT i.id,i.role,i.expires_at,i.created_at,w.name workspace_name,u.username inviter_username FROM workspace_invitations i JOIN workspaces w ON w.id=i.workspace_id JOIN users u ON u.id=i.inviter_user_id WHERE i.invited_user_id=? AND i.status='pending' AND i.expires_at>? ORDER BY i.created_at DESC",
+    )
+      .bind(user.id, now)
+      .all<Record<string, unknown>>();
+    return json({ data: rows.results.map(toCamel) });
+  }
+  const invitationResponse = path.match(
+    /^\/api\/v1\/invitations\/([^/]+)\/(accept|decline)$/,
+  );
+  if (invitationResponse && method === "POST") {
+    const now = new Date().toISOString();
+    const invitation = await env.DB.prepare(
+      "SELECT id,workspace_id,role FROM workspace_invitations WHERE id=? AND invited_user_id=? AND status='pending' AND expires_at>?",
+    )
+      .bind(invitationResponse[1], user.id, now)
+      .first<{ id: string; workspace_id: string; role: WorkspaceRole }>();
+    if (!invitation)
+      throw new ApiError(
+        404,
+        "INVITATION_UNAVAILABLE",
+        "This invitation is no longer available.",
+      );
+    const accepted = invitationResponse[2] === "accept";
+    if (accepted)
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO workspace_memberships(workspace_id,user_id,role,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO UPDATE SET role=CASE WHEN workspace_memberships.role='owner' THEN 'owner' ELSE excluded.role END,updated_at=excluded.updated_at",
+        ).bind(invitation.workspace_id, user.id, invitation.role, now, now),
+        env.DB.prepare(
+          "UPDATE workspace_invitations SET status='accepted',updated_at=? WHERE id=? AND status='pending'",
+        ).bind(now, invitation.id),
+      ]);
+    else
+      await env.DB.prepare(
+        "UPDATE workspace_invitations SET status='declined',updated_at=? WHERE id=? AND invited_user_id=? AND status='pending'",
+      )
+        .bind(now, invitation.id, user.id)
+        .run();
+    await audit(
+      env.DB,
+      user.id,
+      invitation.workspace_id,
+      accepted ? "invitation_accepted" : "invitation_declined",
+      "workspace_invitation",
+      invitation.id,
+    );
+    return json({ data: { accepted } });
+  }
+
   const workspace = await workspaceAccess(request, env.DB, user.id);
   assertWorkspacePermission(workspace.role, path, method);
   const repo = new BudgetRepository(env.DB, workspace.dataOwnerUserId);
@@ -608,6 +667,14 @@ async function route(request: Request, env: Env): Promise<Response> {
           "SELECT u.id,u.username,m.role FROM workspace_memberships m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=? ORDER BY m.role,u.username",
         )
           .bind(workspace.id)
+          .all()
+          .then((r) =>
+            r.results.map((row) => toCamel(row as Record<string, unknown>)),
+          ),
+        invitations: await env.DB.prepare(
+          "SELECT i.id,u.username,i.role,i.expires_at,i.created_at FROM workspace_invitations i JOIN users u ON u.id=i.invited_user_id WHERE i.workspace_id=? AND i.status='pending' AND i.expires_at>? ORDER BY i.created_at DESC",
+        )
+          .bind(workspace.id, new Date().toISOString())
           .all()
           .then((r) =>
             r.results.map((row) => toCamel(row as Record<string, unknown>)),
@@ -629,32 +696,108 @@ async function route(request: Request, env: Env): Promise<Response> {
     )
       .bind(normalizeUsername(username))
       .first<{ id: string }>();
-    if (!invited)
-      throw new ApiError(
-        404,
-        "USER_NOT_FOUND",
-        "That user must create an account before being invited.",
-      );
-    await env.DB.prepare(
-      "INSERT INTO workspace_memberships(workspace_id,user_id,role,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO UPDATE SET role=excluded.role,updated_at=excluded.updated_at",
-    )
-      .bind(
-        workspace.id,
-        invited.id,
-        role,
-        new Date().toISOString(),
-        new Date().toISOString(),
+    const now = new Date(),
+      expires = new Date(now);
+    expires.setUTCDate(expires.getUTCDate() + 7);
+    if (invited && invited.id !== user.id) {
+      const membership = await env.DB.prepare(
+        "SELECT 1 present FROM workspace_memberships WHERE workspace_id=? AND user_id=?",
       )
+        .bind(workspace.id, invited.id)
+        .first();
+      if (!membership) {
+        const existing = await env.DB.prepare(
+          "SELECT id FROM workspace_invitations WHERE workspace_id=? AND invited_user_id=? AND status='pending'",
+        )
+          .bind(workspace.id, invited.id)
+          .first<{ id: string }>();
+        const invitationId = existing?.id ?? crypto.randomUUID();
+        if (existing)
+          await env.DB.prepare(
+            "UPDATE workspace_invitations SET role=?,expires_at=?,updated_at=? WHERE id=?",
+          )
+            .bind(role, expires.toISOString(), now.toISOString(), invitationId)
+            .run();
+        else
+          await env.DB.prepare(
+            "INSERT INTO workspace_invitations(id,workspace_id,inviter_user_id,invited_user_id,role,status,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?,?)",
+          )
+            .bind(
+              invitationId,
+              workspace.id,
+              user.id,
+              invited.id,
+              role,
+              expires.toISOString(),
+              now.toISOString(),
+              now.toISOString(),
+            )
+            .run();
+        await audit(
+          env.DB,
+          user.id,
+          workspace.id,
+          "invitation_sent",
+          "workspace_invitation",
+          invitationId,
+        );
+      }
+    }
+    return json(
+      {
+        data: {
+          message:
+            "If that username is eligible, an invitation will appear in their account.",
+        },
+      },
+      202,
+    );
+  }
+  const workspaceInvitationMatch = path.match(
+    /^\/api\/v1\/workspace\/invitations\/([^/]+)(?:\/(resend))?$/,
+  );
+  if (workspaceInvitationMatch && method === "DELETE") {
+    const result = await env.DB.prepare(
+      "UPDATE workspace_invitations SET status='cancelled',updated_at=? WHERE id=? AND workspace_id=? AND status='pending'",
+    )
+      .bind(new Date().toISOString(), workspaceInvitationMatch[1], workspace.id)
       .run();
+    if (!result.meta.changes)
+      throw new ApiError(404, "NOT_FOUND", "Pending invitation not found.");
     await audit(
       env.DB,
       user.id,
       workspace.id,
-      "member_invited",
-      "user",
-      invited.id,
+      "invitation_cancelled",
+      "workspace_invitation",
+      workspaceInvitationMatch[1]!,
     );
-    return json({ data: { userId: invited.id, role } }, 201);
+    return new Response(null, { status: 204 });
+  }
+  if (workspaceInvitationMatch?.[2] === "resend" && method === "POST") {
+    const expires = new Date();
+    expires.setUTCDate(expires.getUTCDate() + 7);
+    const result = await env.DB.prepare(
+      "UPDATE workspace_invitations SET expires_at=?,updated_at=? WHERE id=? AND workspace_id=? AND status='pending'",
+    )
+      .bind(
+        expires.toISOString(),
+        new Date().toISOString(),
+        workspaceInvitationMatch[1],
+        workspace.id,
+      )
+      .run();
+    if (!result.meta.changes)
+      throw new ApiError(404, "NOT_FOUND", "Pending invitation not found.");
+    await audit(
+      env.DB,
+      user.id,
+      workspace.id,
+      "invitation_resent",
+      "workspace_invitation",
+      workspaceInvitationMatch[1]!,
+    );
+    return json({ data: { expiresAt: expires.toISOString() } });
   }
   const memberMatch = path.match(/^\/api\/v1\/workspace\/members\/([^/]+)$/);
   if (memberMatch && method === "PATCH") {
@@ -1283,55 +1426,6 @@ async function route(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  if (path === "/api/v1/future-purchases" && method === "GET")
-    return json({
-      data: (await repo.listFuturePurchases()).map((row) => toCamel(row)),
-    });
-  if (path === "/api/v1/future-purchases" && method === "POST") {
-    const body = assertObject(await readJson(request));
-    const description = requireString(body, "description", 500),
-      purchaseDate = requireDate(
-        typeof body.purchaseDate === "string" ? body.purchaseDate : null,
-        "purchaseDate",
-      ),
-      accountId = requireString(body, "accountId");
-    if (purchaseDate <= todayInTimezone(env.APP_TIMEZONE))
-      throw new ApiError(
-        422,
-        "VALIDATION_ERROR",
-        "Future purchase date must be after today.",
-      );
-    if (
-      !Number.isSafeInteger(body.amountMinor) ||
-      Number(body.amountMinor) <= 0
-    )
-      throw new ApiError(
-        422,
-        "VALIDATION_ERROR",
-        "amountMinor must be positive integer cents.",
-      );
-    return json(
-      {
-        data: toCamel(
-          (await repo.createFuturePurchase(
-            description,
-            Number(body.amountMinor),
-            purchaseDate,
-            accountId,
-          )) as Record<string, unknown>,
-        ),
-      },
-      201,
-    );
-  }
-  const futurePurchaseMatch = path.match(
-    /^\/api\/v1\/future-purchases\/([^/]+)$/,
-  );
-  if (futurePurchaseMatch && method === "DELETE") {
-    if (!(await repo.deleteFuturePurchase(futurePurchaseMatch[1]!)))
-      throw new ApiError(404, "NOT_FOUND", "Future purchase not found.");
-    return new Response(null, { status: 204 });
-  }
   const projectionRuleMatch = path.match(
     /^\/api\/v1\/projection-rules\/([^/]+)$/,
   );
@@ -1523,7 +1617,6 @@ async function route(request: Request, env: Env): Promise<Response> {
           accounts,
           snapshots,
           effects,
-          [],
           assumptions,
           startDate,
           endDate,
