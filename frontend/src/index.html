@@ -8,7 +8,7 @@
       content="Private transaction, monthly spending, and net-worth tracker."
     />
     <title>R&R Budget</title>
-    <link rel="stylesheet" href="styles.css?v=7.13.1" />
+    <link rel="stylesheet" href="styles.css?v=7.13.2" />
   </head>
   <body>
     <!-- Authentication is the only visible section until /auth/me confirms a session. -->
@@ -101,12 +101,12 @@
         >
           ☰
         </button>
-        <a class="brand" href="#transactions"
+        <a id="sidebar-brand" class="brand" href="#transactions"
           ><span id="brand-name">My</span><b>Budget</b></a
         >
       </div>
       <nav aria-label="Primary">
-        <a href="#transactions"
+        <a id="transactions-nav" href="#transactions"
           ><i aria-hidden="true">↕</i><span>Transactions</span></a
         ><a href="#spending"
           ><i aria-hidden="true">◔</i><span>Monthly activity</span></a
@@ -633,11 +633,20 @@
         <div class="hero">
           <div>
             <p class="eyebrow">Make it yours</p>
-            <h1>Categories & accounts</h1>
+            <h1>Settings</h1>
+            <p>Organize your budget, forecasting, access, and appearance.</p>
           </div>
         </div>
         <div class="settings-accordions">
-          <details class="panel settings-disclosure" open>
+          <div class="settings-group-heading">
+            <p class="eyebrow">Budget organization</p>
+            <h2>Categories</h2>
+          </div>
+          <details
+            class="panel settings-disclosure"
+            data-settings-group="organization"
+            open
+          >
             <summary>Categories</summary>
             <div class="settings-content">
               <form id="category-form" class="inline-form">
@@ -655,7 +664,10 @@
               <ul id="categories-list" class="settings-list"></ul>
             </div>
           </details>
-          <details class="panel settings-disclosure">
+          <details
+            class="panel settings-disclosure"
+            data-settings-group="organization"
+          >
             <summary>Master categories</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -673,7 +685,14 @@
               <ul id="master-categories-list" class="settings-list"></ul>
             </div>
           </details>
-          <details class="panel settings-disclosure">
+          <div class="settings-group-heading">
+            <p class="eyebrow">Accounts and forecasting</p>
+            <h2>Financial structure</h2>
+          </div>
+          <details
+            class="panel settings-disclosure"
+            data-settings-group="forecasting"
+          >
             <summary>Accounts</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -684,7 +703,10 @@
               <ul id="accounts-list" class="settings-list"></ul>
             </div>
           </details>
-          <details class="panel settings-disclosure">
+          <details
+            class="panel settings-disclosure"
+            data-settings-group="forecasting"
+          >
             <summary>Automatic category rules</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -716,46 +738,35 @@
               <ul id="category-rules-list" class="settings-list"></ul>
             </div>
           </details>
-          <details class="panel settings-disclosure">
+          <div class="settings-group-heading">
+            <p class="eyebrow">Access and appearance</p>
+            <h2>Personalization</h2>
+          </div>
+          <details
+            class="panel settings-disclosure"
+            data-settings-group="personalization"
+          >
             <summary>Website colors</summary>
             <div class="settings-content">
               <p class="fine-print">
                 Choose a preset or customize the colors saved to your account.
               </p>
-              <div
-                class="theme-presets"
-                role="group"
-                aria-label="Color presets"
-              >
-                <button
-                  type="button"
-                  class="secondary"
-                  data-theme-preset="original"
-                >
-                  Original
-                </button>
-                <button
-                  type="button"
-                  class="secondary"
-                  data-theme-preset="forest"
-                >
-                  Forest
-                </button>
-                <button
-                  type="button"
-                  class="secondary"
-                  data-theme-preset="ocean"
-                >
-                  Ocean
-                </button>
-                <button
-                  type="button"
-                  class="secondary"
-                  data-theme-preset="contrast"
-                >
-                  High contrast
-                </button>
-              </div>
+              <label class="theme-presets"
+                >Default theme
+                <select id="default-theme">
+                  <option value="classic">Classic Forest</option>
+                  <option value="ocean">Ocean Blue</option>
+                  <option value="sage">Sage</option>
+                  <option value="sand">Warm Sand</option>
+                  <option value="burgundy">Burgundy</option>
+                  <option value="plum">Plum</option>
+                  <option value="slate">Slate</option>
+                  <option value="midnight">Midnight</option>
+                  <option value="terracotta">Terracotta</option>
+                  <option value="contrast">High Contrast</option>
+                  <option value="custom" disabled>Custom</option>
+                </select>
+              </label>
               <form id="website-colors-form" class="website-colors-form">
                 <label
                   >Highlight color<input type="color" name="highlightColor"
@@ -792,7 +803,11 @@
               </form>
             </div>
           </details>
-          <details id="workspace-access-card" class="panel settings-disclosure">
+          <details
+            id="workspace-access-card"
+            class="panel settings-disclosure"
+            data-settings-group="personalization"
+          >
             <summary>Budget access</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -818,7 +833,15 @@
               <ul id="members-list" class="settings-list"></ul>
             </div>
           </details>
-          <details id="archived-items-card" class="panel settings-disclosure">
+          <div class="settings-group-heading">
+            <p class="eyebrow">Data lifecycle</p>
+            <h2>Archived records</h2>
+          </div>
+          <details
+            id="archived-items-card"
+            class="panel settings-disclosure"
+            data-settings-group="lifecycle"
+          >
             <summary>Archived items</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -1164,6 +1187,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.13.1"></script>
+    <script type="module" src="app.js?v=7.13.2"></script>
   </body>
 </html>

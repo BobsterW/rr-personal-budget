@@ -85,7 +85,7 @@ const defaultWebsiteColors = {
   chartAccentColor: "#16211d",
 };
 const themePresets = {
-  original: defaultWebsiteColors,
+  classic: defaultWebsiteColors,
   forest: {
     ...defaultWebsiteColors,
     highlightColor: "#236b4e",
@@ -102,6 +102,70 @@ const themePresets = {
     positiveColor: "#17765f",
     negativeColor: "#b04444",
     chartAccentColor: "#123f58",
+  },
+  sage: {
+    ...defaultWebsiteColors,
+    highlightColor: "#55705a",
+    backgroundColor: "#eef2e8",
+    cardColor: "#fbfdf7",
+    positiveColor: "#397052",
+    negativeColor: "#a34f45",
+    chartAccentColor: "#2f4637",
+  },
+  sand: {
+    ...defaultWebsiteColors,
+    highlightColor: "#8a643f",
+    backgroundColor: "#f5eddf",
+    cardColor: "#fffaf0",
+    positiveColor: "#4d7657",
+    negativeColor: "#a9473c",
+    chartAccentColor: "#49382a",
+  },
+  burgundy: {
+    ...defaultWebsiteColors,
+    highlightColor: "#7b2942",
+    backgroundColor: "#f5e9ed",
+    cardColor: "#fffafb",
+    positiveColor: "#32705a",
+    negativeColor: "#a12c47",
+    chartAccentColor: "#4c1d2d",
+  },
+  plum: {
+    ...defaultWebsiteColors,
+    highlightColor: "#67416f",
+    backgroundColor: "#f1ebf4",
+    cardColor: "#fefbff",
+    positiveColor: "#39705b",
+    negativeColor: "#a74357",
+    chartAccentColor: "#43274a",
+  },
+  slate: {
+    ...defaultWebsiteColors,
+    highlightColor: "#465d6b",
+    backgroundColor: "#eaf0f2",
+    cardColor: "#fbfdfe",
+    positiveColor: "#32705d",
+    negativeColor: "#a7433b",
+    chartAccentColor: "#263a45",
+  },
+  midnight: {
+    ...defaultWebsiteColors,
+    highlightColor: "#243f67",
+    backgroundColor: "#e8edf5",
+    cardColor: "#fafcff",
+    textColor: "#16233a",
+    positiveColor: "#28715b",
+    negativeColor: "#aa3f4b",
+    chartAccentColor: "#172d4d",
+  },
+  terracotta: {
+    ...defaultWebsiteColors,
+    highlightColor: "#a4513d",
+    backgroundColor: "#f6e9df",
+    cardColor: "#fffaf5",
+    positiveColor: "#47745a",
+    negativeColor: "#ad4436",
+    chartAccentColor: "#5d3328",
   },
   contrast: {
     ...defaultWebsiteColors,
@@ -129,6 +193,20 @@ function applyWebsiteColors(colors) {
   if (form)
     for (const [name, color] of Object.entries(value))
       if (form.elements[name]) form.elements[name].value = color;
+  const preset = Object.entries(themePresets).find(([, candidate]) =>
+    Object.keys(defaultWebsiteColors).every(
+      (key) => candidate[key] === value[key],
+    ),
+  );
+  if ($("#default-theme")) $("#default-theme").value = preset?.[0] ?? "custom";
+}
+
+function updateWorkspaceBrand() {
+  const workspace = state.user?.workspaces?.find(
+    (item) => item.id === state.workspaceId,
+  );
+  const owner = workspace?.ownerUsername ?? state.user?.username ?? "My";
+  $("#brand-name").textContent = `${owner}'s`;
 }
 function colorContrast(first, second) {
   const luminance = (hex) => {
@@ -253,7 +331,7 @@ async function enterApp(user) {
   $("#auth-screen").hidden = true;
   $$(".app-shell").forEach((element) => (element.hidden = false));
   $("#current-username").textContent = user.username;
-  $("#brand-name").textContent = `${user.username}'s`;
+  updateWorkspaceBrand();
   $("#welcome-back").textContent = `Welcome back, ${user.username}.`;
   $("#admin-nav").hidden = user.platformRole !== "admin";
   const workspaceSelect = $("#workspace-select");
@@ -281,6 +359,8 @@ function applyRoleVisibility() {
     const link = $(`#app-sidebar a[href="#${id}"]`);
     if (link) link.hidden = viewer;
   }
+  $("#transactions-nav").hidden = viewer;
+  $("#sidebar-brand").href = viewer ? "#spending" : "#transactions";
   $("#workspace-access-card")?.toggleAttribute(
     "hidden",
     state.workspaceRole !== "owner",
@@ -1043,13 +1123,13 @@ function drawCashFlowChart() {
         const color =
           state.cashFlowColorBy === "type"
             ? direction > 0
-              ? "var(--positive)"
-              : "var(--danger)"
+              ? (state.websiteColors?.positiveColor ?? "#185b45")
+              : (state.websiteColors?.negativeColor ?? "#a33b32")
             : stableSeriesColor(
                 row.id ?? row.name,
                 direction > 0 ? "income" : "expense",
               );
-        const markup = `<path class="cashflow-area" style="fill:${color}" d="${area(lower, upper)}"><title>${escapeHtml(row.name)}</title></path>`;
+        const markup = `<path class="cashflow-area" style="fill:${color};stroke:${color}" d="${area(lower, upper)}"><title>${escapeHtml(row.name)}</title></path>`;
         lower = upper;
         return markup;
       })
@@ -1836,10 +1916,6 @@ document.addEventListener("click", (event) => {
     drawCashFlowChart();
     return;
   }
-  if (target.dataset.themePreset) {
-    applyWebsiteColors(themePresets[target.dataset.themePreset]);
-    return;
-  }
   if (target.id === "reset-website-colors") {
     applyWebsiteColors(defaultWebsiteColors);
     return;
@@ -2404,6 +2480,20 @@ $("#website-colors-form").addEventListener("submit", (event) => {
     notify("Website colors saved to your account.");
   });
 });
+$$("[data-settings-group]").forEach((card) => {
+  card.addEventListener("toggle", () => {
+    if (!card.open) return;
+    $$(`[data-settings-group="${card.dataset.settingsGroup}"]`).forEach(
+      (peer) => {
+        if (peer !== card) peer.open = false;
+      },
+    );
+  });
+});
+$("#default-theme").addEventListener("change", (event) => {
+  const preset = themePresets[event.target.value];
+  if (preset) applyWebsiteColors(preset);
+});
 $("#account-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const formElement = event.currentTarget;
@@ -2775,6 +2865,7 @@ $("#workspace-select").addEventListener("change", async (event) => {
   state.categories = [];
   state.accounts = [];
   state.netWorthSelectionInitialized = false;
+  updateWorkspaceBrand();
   applyRoleVisibility();
   await run(async () => {
     await loadLookups();

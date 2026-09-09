@@ -155,11 +155,12 @@ interface WorkspaceAccess {
   name: string;
   role: WorkspaceRole;
   dataOwnerUserId: string;
+  ownerUsername: string;
 }
 async function listWorkspaces(db: D1Database, userId: string) {
   const result = await db
     .prepare(
-      "SELECT w.id,w.name,m.role FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id WHERE m.user_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END,w.name",
+      "SELECT w.id,w.name,m.role,owner.username owner_username FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id JOIN users owner ON owner.id=w.data_owner_user_id WHERE m.user_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END,w.name",
     )
     .bind(userId)
     .all<Record<string, unknown>>();
@@ -173,7 +174,7 @@ async function workspaceAccess(
   const requested = request.headers.get("x-workspace-id");
   const row = await db
     .prepare(
-      `SELECT w.id,w.name,w.data_owner_user_id,m.role FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id WHERE m.user_id=? ${requested ? "AND w.id=?" : "ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END LIMIT 1"}`,
+      `SELECT w.id,w.name,w.data_owner_user_id,m.role,owner.username owner_username FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id JOIN users owner ON owner.id=w.data_owner_user_id WHERE m.user_id=? ${requested ? "AND w.id=?" : "ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END LIMIT 1"}`,
     )
     .bind(...(requested ? [userId, requested] : [userId]))
     .first<{
@@ -181,6 +182,7 @@ async function workspaceAccess(
       name: string;
       data_owner_user_id: string;
       role: WorkspaceRole;
+      owner_username: string;
     }>();
   if (!row)
     throw new ApiError(
@@ -193,6 +195,7 @@ async function workspaceAccess(
     name: row.name,
     role: row.role,
     dataOwnerUserId: row.data_owner_user_id,
+    ownerUsername: row.owner_username,
   };
 }
 function assertWorkspacePermission(
