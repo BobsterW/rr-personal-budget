@@ -550,24 +550,6 @@ td {
   display: grid;
   gap: 22px;
 }
-.settings-group-heading {
-  margin: 12px 2px -8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
-}
-.settings-group-heading:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
-}
-.settings-group-heading h2,
-.settings-group-heading p {
-  margin: 0;
-}
-.settings-group-heading h2 {
-  margin-top: 4px;
-  font-size: 1.25rem;
-}
 .bars {
   display: grid;
   gap: 14px;
@@ -1395,13 +1377,10 @@ td {
   );
 }
 .theme-presets {
-  display: grid;
-  max-width: 420px;
-  gap: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 14px 0;
-}
-.theme-presets select {
-  width: 100%;
 }
 .website-colors-form {
   display: grid;
