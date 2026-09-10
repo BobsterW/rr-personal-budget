@@ -15,6 +15,7 @@ const API = window.APP_CONFIG.API_BASE_URL.replace(/\/$/, "");
 const state = {
   categories: [],
   accounts: [],
+  vendors: [],
   masterCategories: [],
   categoryRules: [],
   categorySuggestions: [],
@@ -44,6 +45,14 @@ const state = {
   user: null,
   workspaceId: null,
   workspaceRole: null,
+  separatePersonalBusiness: false,
+  transactionFilters: {
+    vendor: new Set(),
+    categoryId: new Set(),
+    accountId: new Set(),
+    type: new Set(),
+    scope: new Set(),
+  },
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -341,7 +350,11 @@ function applyRoleVisibility() {
   document.body.classList.toggle("role-viewer", viewer);
   for (const id of ["transactions", "budget", "settings"]) {
     const link = $(`#app-sidebar a[href="#${id}"]`);
-    if (link) link.hidden = viewer;
+    if (link) {
+      link.hidden = viewer;
+      link.classList.toggle("permission-hidden", viewer);
+      link.setAttribute("aria-hidden", String(viewer));
+    }
   }
   // The logo is also a navigation entry. Viewers must not be sent to the
   // Transactions route by clicking it after the Transactions link is hidden.
@@ -366,10 +379,24 @@ function updateWorkspaceIdentity() {
   );
   const ownerUsername =
     workspace?.ownerUsername ?? state.user?.username ?? "My";
+  state.separatePersonalBusiness = Boolean(workspace?.separatePersonalBusiness);
   $("#brand-name").textContent = `${ownerUsername}'s`;
-  $("#workspace-context").textContent = workspace
-    ? `${ownerUsername}'s Budget · ${workspace.role}`
-    : "Current budget";
+  updateScopeVisibility();
+}
+
+function selectedScope(selector) {
+  return state.separatePersonalBusiness ? $(selector)?.value || "both" : "both";
+}
+function updateScopeVisibility() {
+  $$(".scope-only").forEach(
+    (element) => (element.hidden = !state.separatePersonalBusiness),
+  );
+  $$(".structure-toggle").forEach((button) => {
+    const active =
+      String(state.separatePersonalBusiness) === button.dataset.separate;
+    button.classList.toggle("secondary", !active);
+    button.setAttribute("aria-pressed", String(active));
+  });
 }
 async function refreshWorkspaceIdentity() {
   // Refresh memberships after a workspace switch so role-based navigation and
@@ -443,6 +470,53 @@ function optionList(items, selected = "") {
     )
     .join("");
 }
+function renderTransactionFilter(key, items) {
+  const container = $(
+    `#transaction-${key === "categoryId" ? "category" : key === "accountId" ? "account" : key}-filter`,
+  );
+  if (!container) return;
+  const selected = state.transactionFilters[key];
+  const normalized = items.map((item) =>
+    typeof item === "string" ? { id: item, name: item } : item,
+  );
+  container.innerHTML = `<div class="filter-actions"><button type="button" class="secondary compact" data-filter-action="all" data-filter-key="${key}">Select all</button><button type="button" class="secondary compact" data-filter-action="clear" data-filter-key="${key}">Clear</button></div>${normalized
+    .map(
+      (item) =>
+        `<label><input type="checkbox" data-filter-option="${key}" value="${escapeHtml(item.id)}" ${selected.has(String(item.id)) ? "checked" : ""}/> <span>${escapeHtml(item.name)}</span></label>`,
+    )
+    .join("")}`;
+  const summary = $(`[data-transaction-filter="${key}"] summary strong`);
+  if (summary)
+    summary.textContent = selected.size ? String(selected.size) : "All";
+}
+function renderTransactionFilters() {
+  renderTransactionFilter(
+    "vendor",
+    state.vendors.map((item) => ({
+      id: item.vendorName,
+      name: item.vendorName,
+    })),
+  );
+  renderTransactionFilter(
+    "categoryId",
+    state.categories.filter((item) => item.active),
+  );
+  renderTransactionFilter(
+    "accountId",
+    state.accounts.filter((item) => item.active),
+  );
+  renderTransactionFilter("type", [
+    "expense",
+    "refund",
+    "income",
+    "transfer",
+    "adjustment",
+  ]);
+  renderTransactionFilter("scope", [
+    { id: "personal", name: "Personal" },
+    { id: "business", name: "Business" },
+  ]);
+}
 function refreshSelects() {
   $$('select[name="categoryId"]').forEach((element) => {
     element.innerHTML = optionList(state.categories);
@@ -461,10 +535,7 @@ function refreshSelects() {
     '<option value="">No change</option>' + optionList(state.accounts);
   $("#bulk-category").innerHTML =
     '<option value="">No change</option>' + optionList(state.categories);
-  $("#transaction-category-filter").innerHTML =
-    '<option value="">All categories</option>' + optionList(state.categories);
-  $("#transaction-account-filter").innerHTML =
-    '<option value="">All accounts</option>' + optionList(state.accounts);
+  renderTransactionFilters();
 }
 function refreshTransactionCategoryOptions(type, selected = "") {
   const kind = type === "refund" ? "expense" : type;
@@ -479,14 +550,22 @@ async function loadLookups() {
     api("/api/v1/accounts"),
     api("/api/v1/master-categories"),
   ];
-  if (state.workspaceRole !== "viewer")
+  if (state.workspaceRole !== "viewer") {
     requests.push(api("/api/v1/category-rules"));
-  const [categories, accounts, masterCategories, categoryRules = { data: [] }] =
-    await Promise.all(requests);
+    requests.push(api("/api/v1/transaction-vendors"));
+  }
+  const [
+    categories,
+    accounts,
+    masterCategories,
+    categoryRules = { data: [] },
+    vendors = { data: [] },
+  ] = await Promise.all(requests);
   state.categories = categories.data;
   state.accounts = accounts.data;
   state.masterCategories = masterCategories.data;
   state.categoryRules = categoryRules.data;
+  state.vendors = vendors.data;
   refreshSelects();
   $("#categories-list").innerHTML = state.categories
     .filter((item) => item.active)
@@ -499,14 +578,14 @@ async function loadLookups() {
     .filter((item) => item.active)
     .map(
       (item) =>
-        `<li><span><strong>${escapeHtml(item.name)}</strong> <small>(${escapeHtml(item.accountType)}, ${escapeHtml(item.liquidityClass ?? "liquid")})</small><br><small>Interest ${Number(item.annualInterestBps ?? 0) / 100}% · Payment ${money.format(dollars(item.paymentAmountMinor))} ${escapeHtml(item.paymentFrequency ?? "none")}</small></span><span>${iconButton("edit", "Edit account", "edit-account", `data-id="${escapeHtml(item.id)}"`)} ${iconButton("trash", "Archive account", "archive", `data-kind="accounts" data-id="${escapeHtml(item.id)}"`)}</span></li>`,
+        `<li><span><strong>${escapeHtml(item.name)}</strong> <small>(${escapeHtml(item.accountType)}, ${escapeHtml(item.liquidityClass ?? "liquid")}${state.separatePersonalBusiness ? `, ${escapeHtml(item.budgetScope ?? "personal")}` : ""})</small><br><small>Interest ${Number(item.annualInterestBps ?? 0) / 100}% · Payment ${money.format(dollars(item.paymentAmountMinor))} ${escapeHtml(item.paymentFrequency ?? "none")}</small></span><span>${iconButton("edit", "Edit account", "edit-account", `data-id="${escapeHtml(item.id)}"`)} ${iconButton("trash", "Archive account", "archive", `data-kind="accounts" data-id="${escapeHtml(item.id)}"`)}</span></li>`,
     )
     .join("");
   $("#master-categories-list").innerHTML = state.masterCategories
     .filter((item) => item.active)
     .map(
       (item) =>
-        `<li><span>${escapeHtml(item.name)}</span>${iconButton("trash", "Archive master category", "archive-master", `data-id="${escapeHtml(item.id)}"`)}</li>`,
+        `<li><span>${escapeHtml(item.name)}</span><span>${state.separatePersonalBusiness ? `<select class="master-scope-select" data-id="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.name)} budget group"><option value="personal" ${item.budgetScope !== "business" ? "selected" : ""}>Personal</option><option value="business" ${item.budgetScope === "business" ? "selected" : ""}>Business</option></select>` : ""}${iconButton("trash", "Archive master category", "archive-master", `data-id="${escapeHtml(item.id)}"`)}</span></li>`,
     )
     .join("");
   $("#category-rules-list").innerHTML = state.categoryRules
@@ -570,20 +649,14 @@ async function loadTransactions() {
     page: String(state.page),
     pageSize: String(state.pageSize),
   });
-  const search = $("#transaction-search").value.trim(),
-    vendor = $("#transaction-vendor-filter").value.trim(),
-    categoryId = $("#transaction-category-filter").value,
-    accountId = $("#transaction-account-filter").value,
-    type = $("#transaction-type-filter").value;
+  const search = $("#transaction-search").value.trim();
   if ($("#transaction-start-date").value)
     params.set("startDate", $("#transaction-start-date").value);
   if ($("#transaction-end-date").value)
     params.set("endDate", $("#transaction-end-date").value);
   if (search) params.set("search", search);
-  if (vendor) params.set("vendor", vendor);
-  if (categoryId) params.set("categoryId", categoryId);
-  if (accountId) params.set("accountId", accountId);
-  if (type) params.set("type", type);
+  for (const [key, selected] of Object.entries(state.transactionFilters))
+    for (const value of selected) params.append(key, value);
   params.set("sort", $("#transaction-sort").value);
   const result = await api(`/api/v1/transactions?${params}`);
   state.transactions = result.data;
@@ -655,20 +728,14 @@ function selectTransactionAt(index, checked, range = false) {
 }
 function currentTransactionFilters() {
   const params = new URLSearchParams();
-  const search = $("#transaction-search").value.trim(),
-    vendor = $("#transaction-vendor-filter").value.trim(),
-    categoryId = $("#transaction-category-filter").value,
-    accountId = $("#transaction-account-filter").value,
-    type = $("#transaction-type-filter").value;
+  const search = $("#transaction-search").value.trim();
   if ($("#transaction-start-date").value)
     params.set("startDate", $("#transaction-start-date").value);
   if ($("#transaction-end-date").value)
     params.set("endDate", $("#transaction-end-date").value);
   if (search) params.set("search", search);
-  if (vendor) params.set("vendor", vendor);
-  if (categoryId) params.set("categoryId", categoryId);
-  if (accountId) params.set("accountId", accountId);
-  if (type) params.set("type", type);
+  for (const [key, selected] of Object.entries(state.transactionFilters))
+    for (const value of selected) params.append(key, value);
   return params;
 }
 function drawBars(selector, rows) {
@@ -755,7 +822,12 @@ function renderCategoryRanking() {
           const selectedCategory =
             state.activityTrendSelection.kind === "category" &&
             state.activityTrendSelection.id === row.id;
-          return `<article class="ranked-category-row ${row.amount_minor < 0 ? "is-refund-total" : ""} ${selectedCategory ? "selected" : ""}" data-trend-category="${escapeHtml(row.id)}" data-trend-label="${escapeHtml(row.name)}" tabindex="0" role="button" aria-pressed="${selectedCategory}"><span class="rank-number">${index + 1}</span><div class="ranked-category-main"><div class="ranked-category-label"><strong>${escapeHtml(row.name)}</strong><span>${money.format(dollars(row.amount_minor))}</span></div><progress class="ranked-track" max="100" value="${(Math.abs(row.amount_minor) / max) * 100}" aria-label="${escapeHtml(row.name)} relative amount"></progress></div><div class="category-tooltip" role="tooltip"><strong>${escapeHtml(row.name)}</strong><span>Net actual: ${money.format(dollars(row.amount_minor))}</span><span>${state.activityMode === "income" ? "Target" : "Budget"}: ${periodBudget ? money.format(dollars(periodBudget)) : "Not set"}</span><span>${periodBudget ? `${remaining < 0 ? "Over" : "Remaining"}: ${money.format(dollars(Math.abs(remaining)))}` : ""}</span><span>${count} transaction${count === 1 ? "" : "s"} · Average ${money.format(dollars(average))}</span><span>${reversalMinor ? `${state.activityMode === "expense" ? "Refunds" : "Reversals"}: ${money.format(dollars(reversalMinor))}` : `No ${state.activityMode === "expense" ? "refunds" : "reversals"} in this range`}</span></div></article>`;
+          const budgetLabel =
+            state.activityMode === "income" ? "Target" : "Budget";
+          const status = periodBudget
+            ? `${remaining < 0 ? (state.activityMode === "expense" ? "Over" : "Above target") : state.activityMode === "expense" ? "Left" : "To target"} ${money.format(dollars(Math.abs(remaining)))}`
+            : `No ${state.activityMode === "income" ? "target" : "budget"} set`;
+          return `<article class="ranked-category-row ${row.amount_minor < 0 ? "is-refund-total" : ""} ${selectedCategory ? "selected" : ""}" data-trend-category="${escapeHtml(row.id)}" data-trend-label="${escapeHtml(row.name)}" tabindex="0" role="button" aria-pressed="${selectedCategory}"><span class="rank-number">${index + 1}</span><div class="ranked-category-main"><div class="ranked-category-label"><strong>${escapeHtml(row.name)}</strong></div><div class="category-financials"><span><small>Actual</small>${money.format(dollars(row.amount_minor))}</span><span><small>${budgetLabel}</small>${periodBudget ? money.format(dollars(periodBudget)) : "—"}</span><strong class="${remaining < 0 ? "negative" : "positive"}">${status}</strong></div><progress class="ranked-track" max="100" value="${(Math.abs(row.amount_minor) / max) * 100}" aria-label="${escapeHtml(row.name)} relative amount"></progress></div><div class="category-tooltip" role="tooltip"><strong>${escapeHtml(row.name)}</strong><span>Net actual: ${money.format(dollars(row.amount_minor))}</span><span>${budgetLabel}: ${periodBudget ? money.format(dollars(periodBudget)) : "Not set"}</span><span>${periodBudget ? `${remaining < 0 ? "Over" : "Remaining"}: ${money.format(dollars(Math.abs(remaining)))}` : ""}</span><span>${count} transaction${count === 1 ? "" : "s"} · Average ${money.format(dollars(average))}</span><span>${reversalMinor ? `${state.activityMode === "expense" ? "Refunds" : "Reversals"}: ${money.format(dollars(reversalMinor))}` : `No ${state.activityMode === "expense" ? "refunds" : "reversals"} in this range`}</span></div></article>`;
         })
         .join("")
     : '<div class="empty">No categories belong to this master category in the selected range.</div>';
@@ -846,25 +918,11 @@ function renderFilteredActivityCards() {
     data = summary?.activity?.[state.activityMode];
   if (!data) return;
   const selected = state.selectedMasterCategoryId,
-    categories = data.byCategory.filter(
-      (row) =>
-        selected === null || masterKey(row.master_category_id) === selected,
-    ),
     accountRows = data.byAccount.filter(
       (row) =>
         selected === null || masterKey(row.master_category_id) === selected,
     );
   drawBars("#account-bars", aggregateAccountRows(accountRows));
-  $("#category-budget-status").innerHTML = categories.length
-    ? categories
-        .map((row) => {
-          const target =
-              Number(row.monthly_budget_minor ?? 0) * summary.monthCount,
-            remaining = target - row.amount_minor;
-          return `<div class="budget-row ${state.activityMode === "expense" && remaining < 0 ? "is-over" : ""}"><span>${escapeHtml(row.name)}</span><span>Actual ${money.format(dollars(row.amount_minor))}</span><span>${state.activityMode === "income" ? "Target" : "Budget"} ${money.format(dollars(target))}</span><strong>${target ? `${remaining < 0 ? (state.activityMode === "expense" ? "Over" : "Above target") : state.activityMode === "expense" ? "Left" : "To target"} ${money.format(dollars(Math.abs(remaining)))}` : `No ${state.activityMode === "income" ? "target" : "budget"} set`}</strong></div>`;
-        })
-        .join("")
-    : `<div class="empty">No ${state.activityMode} activity in this range.</div>`;
 }
 function setActivityMode(mode) {
   state.activityMode = mode;
@@ -893,9 +951,6 @@ function setActivityMode(mode) {
   $("#activity-account-title").textContent = income
     ? "Income by receiving account"
     : "Expenses by account";
-  $("#activity-budget-title").textContent = income
-    ? "Income target tracking"
-    : "Category budget tracking";
   $("#activity-trend-title").textContent = income
     ? "Income trend"
     : "Expense trend";
@@ -912,6 +967,7 @@ async function loadSummary() {
   const range = new URLSearchParams({
     startDate: $("#summary-start-date").value,
     endDate: $("#summary-end-date").value,
+    scope: selectedScope("#summary-scope-filter"),
   });
   const result = await api(`/api/v1/monthly-summary?${range}`);
   const data = result.data;
@@ -1016,6 +1072,7 @@ async function loadTrend() {
     startDate: $("#summary-start-date").value,
     endDate: $("#summary-end-date").value,
     type,
+    scope: selectedScope("#summary-scope-filter"),
   });
   if (state.selectedMasterCategoryId)
     params.set("masterCategoryId", state.selectedMasterCategoryId);
@@ -1204,6 +1261,7 @@ async function loadCashFlow() {
   const params = new URLSearchParams({
     startDate: $("#summary-start-date").value,
     endDate: $("#summary-end-date").value,
+    scope: selectedScope("#summary-scope-filter"),
   });
   const chart = $("#cashflow-chart");
   chart.setAttribute("aria-busy", "true");
@@ -1249,7 +1307,10 @@ async function loadCashFlow() {
 }
 
 async function loadBudget() {
-  const result = await api("/api/v1/budgets");
+  const params = new URLSearchParams({
+    scope: selectedScope("#budget-scope-filter"),
+  });
+  const result = await api(`/api/v1/budgets?${params}`);
   state.categories = result.data;
   for (const type of ["expense", "income"]) {
     const rows = state.categories.filter(
@@ -1280,12 +1341,13 @@ async function loadNetWorth() {
   const range = new URLSearchParams({
     startDate: $("#networth-start-date").value,
     endDate: $("#networth-end-date").value,
+    scope: selectedScope("#networth-scope-filter"),
   });
   const [balances, projection, timeline, projectionRules] = await Promise.all([
-    api("/api/v1/balance-snapshots"),
-    api("/api/v1/projection"),
+    api(`/api/v1/balance-snapshots?${range}`),
+    api(`/api/v1/projection?${range}`),
     api(`/api/v1/net-worth-timeline?${range}`),
-    api("/api/v1/projection-rules"),
+    api(`/api/v1/projection-rules?${range}`),
   ]);
   const latest = new Map();
   state.projectionRules = projectionRules.data;
@@ -1954,6 +2016,44 @@ document.addEventListener("click", (event) => {
   }
   const target = event.target.closest("button");
   if (!target) return;
+  if (target.dataset.filterAction) {
+    const key = target.dataset.filterKey;
+    if (target.dataset.filterAction === "clear") {
+      state.transactionFilters[key].clear();
+    } else {
+      const menu = target.closest(".filter-menu");
+      state.transactionFilters[key] = new Set(
+        $$(`[data-filter-option="${key}"]`, menu).map((input) => input.value),
+      );
+    }
+    renderTransactionFilters();
+    return;
+  }
+  if (target.classList.contains("structure-toggle")) {
+    const enabled = target.dataset.separate === "true";
+    void run(async () => {
+      const result = await api("/api/v1/budget-structure", {
+        method: "PUT",
+        body: JSON.stringify({ separatePersonalBusiness: enabled }),
+      });
+      state.separatePersonalBusiness = Boolean(
+        result.data.separatePersonalBusiness,
+      );
+      const workspace = state.user?.workspaces?.find(
+        (item) => item.id === state.workspaceId,
+      );
+      if (workspace)
+        workspace.separatePersonalBusiness = state.separatePersonalBusiness;
+      updateScopeVisibility();
+      await loadLookups();
+      notify(
+        enabled
+          ? "Personal and business budgeting is now separated."
+          : "Personal and business budgeting is now combined.",
+      );
+    });
+    return;
+  }
   if (target.dataset.cashflowSelectAll || target.dataset.cashflowClear) {
     const kind =
       target.dataset.cashflowSelectAll || target.dataset.cashflowClear;
@@ -2162,6 +2262,7 @@ document.addEventListener("click", (event) => {
     form.elements.name.value = item.name;
     form.elements.accountType.value = item.accountType;
     form.elements.liquidityClass.value = item.liquidityClass ?? "liquid";
+    form.elements.budgetScope.value = item.budgetScope ?? "personal";
     form.elements.annualInterest.value =
       Number(item.annualInterestBps ?? 0) / 100;
     form.elements.paymentAmount.value = dollars(item.paymentAmountMinor);
@@ -2280,6 +2381,42 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  const transactionFilter = event.target.closest?.("[data-filter-option]");
+  if (transactionFilter) {
+    const key = transactionFilter.dataset.filterOption;
+    if (transactionFilter.checked)
+      state.transactionFilters[key].add(transactionFilter.value);
+    else state.transactionFilters[key].delete(transactionFilter.value);
+    renderTransactionFilters();
+    return;
+  }
+  if (event.target.classList.contains("master-scope-select")) {
+    void run(async () => {
+      await api(`/api/v1/master-categories/${event.target.dataset.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ budgetScope: event.target.value }),
+      });
+      await loadLookups();
+      notify("Master category budget group saved.");
+    });
+    return;
+  }
+  if (event.target.id === "summary-scope-filter") {
+    state.selectedMasterCategoryId = null;
+    state.cashFlowFiltersInitialized = false;
+    void run(loadSummary);
+    return;
+  }
+  if (event.target.id === "budget-scope-filter") {
+    void run(loadBudget);
+    return;
+  }
+  if (event.target.id === "networth-scope-filter") {
+    state.netWorthSelectionInitialized = false;
+    state.selectedNetWorthAccounts.clear();
+    void run(loadNetWorth);
+    return;
+  }
   const cashFlowOption = event.target.closest?.("[data-cashflow-kind]");
   if (cashFlowOption) {
     const selected =
@@ -2542,6 +2679,7 @@ $("#account-form").addEventListener("submit", (event) => {
       name: form.get("name"),
       accountType: form.get("accountType"),
       liquidityClass: form.get("liquidityClass"),
+      budgetScope: form.get("budgetScope") || "personal",
       annualGrowthBps: 0,
       paymentAmountMinor: cents(form.get("paymentAmount")),
       paymentFrequency: form.get("paymentFrequency"),

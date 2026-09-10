@@ -13,6 +13,27 @@ const EXPENSE_EFFECT_SQL =
 const INCOME_EFFECT_SQL =
   "CASE WHEN t.transaction_direction='debit' THEN -t.amount_minor ELSE t.amount_minor END";
 
+type BudgetScope = "personal" | "business" | "both";
+const scoped = (scope: BudgetScope, expression: string) =>
+  scope === "both" ? "" : ` AND ${expression}=?`;
+const values = (params: URLSearchParams, key: string) =>
+  params
+    .getAll(key)
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+function addInFilter(
+  clauses: string[],
+  bindings: unknown[],
+  column: string,
+  selected: string[],
+) {
+  if (!selected.length) return;
+  clauses.push(`${column} IN (${selected.map(() => "?").join(",")})`);
+  bindings.push(...selected);
+}
+
 const NOISE_WORDS = new Set([
   "purchase",
   "retail",
@@ -109,7 +130,7 @@ export class BudgetRepository {
     else
       await this.db
         .prepare(
-          "INSERT INTO accounts (id,user_id,name,account_type,liquidity_class,annual_growth_bps,payment_amount_minor,payment_frequency,annual_interest_bps,annual_equity_gain_minor,annual_dividend_minor,annual_depreciation_bps,projection_notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO accounts (id,user_id,name,account_type,liquidity_class,budget_scope,annual_growth_bps,payment_amount_minor,payment_frequency,annual_interest_bps,annual_equity_gain_minor,annual_dividend_minor,annual_depreciation_bps,projection_notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(
           id,
@@ -117,6 +138,7 @@ export class BudgetRepository {
           input.name,
           input.accountType,
           input.liquidityClass ?? "liquid",
+          input.budgetScope ?? "personal",
           input.annualGrowthBps ?? 0,
           input.paymentAmountMinor ?? 0,
           input.paymentFrequency ?? "none",
@@ -156,19 +178,29 @@ export class BudgetRepository {
     ).results;
   }
 
-  async createMasterCategory(name: string) {
+  async createMasterCategory(name: string, budgetScope = "personal") {
     const id = crypto.randomUUID(),
       now = new Date().toISOString();
     await this.db
       .prepare(
-        "INSERT INTO master_categories (id,user_id,name,created_at,updated_at) VALUES (?,?,?,?,?)",
+        "INSERT INTO master_categories (id,user_id,name,budget_scope,created_at,updated_at) VALUES (?,?,?,?,?,?)",
       )
-      .bind(id, this.userId, name, now, now)
+      .bind(id, this.userId, name, budgetScope, now, now)
       .run();
     return this.db
       .prepare("SELECT * FROM master_categories WHERE id=? AND user_id=?")
       .bind(id, this.userId)
       .first();
+  }
+
+  async updateMasterCategoryScope(id: string, budgetScope: string) {
+    const result = await this.db
+      .prepare(
+        "UPDATE master_categories SET budget_scope=?,updated_at=? WHERE id=? AND user_id=? AND active=1",
+      )
+      .bind(budgetScope, new Date().toISOString(), id, this.userId)
+      .run();
+    return result.meta.changes > 0;
   }
 
   async archiveMasterCategory(id: string) {
@@ -303,6 +335,16 @@ export class BudgetRepository {
         .bind(this.userId)
         .all()
     ).results;
+  }
+
+  async listVendors() {
+    const rows = await this.db
+      .prepare(
+        "SELECT vendor_name,COUNT(*) transaction_count FROM transactions WHERE user_id=? GROUP BY vendor_name ORDER BY vendor_name COLLATE NOCASE LIMIT 500",
+      )
+      .bind(this.userId)
+      .all();
+    return rows.results;
   }
 
   async createCategoryRule(
@@ -485,12 +527,13 @@ export class BudgetRepository {
   async updateAccount(id: string, input: Record<string, unknown>) {
     const result = await this.db
       .prepare(
-        "UPDATE accounts SET name=?,account_type=?,liquidity_class=?,annual_growth_bps=?,payment_amount_minor=?,payment_frequency=?,annual_interest_bps=?,annual_equity_gain_minor=?,annual_dividend_minor=?,annual_depreciation_bps=?,projection_notes=?,updated_at=? WHERE id=? AND user_id=?",
+        "UPDATE accounts SET name=?,account_type=?,liquidity_class=?,budget_scope=?,annual_growth_bps=?,payment_amount_minor=?,payment_frequency=?,annual_interest_bps=?,annual_equity_gain_minor=?,annual_dividend_minor=?,annual_depreciation_bps=?,projection_notes=?,updated_at=? WHERE id=? AND user_id=?",
       )
       .bind(
         input.name,
         input.accountType,
         input.liquidityClass,
+        input.budgetScope,
         input.annualGrowthBps,
         input.paymentAmountMinor,
         input.paymentFrequency,
@@ -511,31 +554,37 @@ export class BudgetRepository {
       .first();
   }
 
-  async timelineData() {
+  async timelineData(scope: BudgetScope = "both") {
+    const accountScope = scoped(scope, "budget_scope");
+    const joinedAccountScope = scoped(scope, "a.budget_scope");
     const [accounts, snapshots, effects, projectionRules] = await Promise.all([
       this.db
         .prepare(
-          "SELECT * FROM accounts WHERE active=1 AND user_id=? ORDER BY name",
+          `SELECT * FROM accounts WHERE active=1 AND user_id=?${accountScope} ORDER BY name`,
         )
-        .bind(this.userId)
+        .bind(...(scope === "both" ? [this.userId] : [this.userId, scope]))
         .all(),
       this.db
         .prepare(
-          "SELECT account_id,snapshot_date,balance_minor FROM balance_snapshots WHERE user_id=? ORDER BY snapshot_date",
+          `SELECT s.account_id,s.snapshot_date,s.balance_minor FROM balance_snapshots s JOIN accounts a ON a.id=s.account_id AND a.user_id=s.user_id WHERE s.user_id=?${joinedAccountScope} ORDER BY s.snapshot_date`,
         )
-        .bind(this.userId)
+        .bind(...(scope === "both" ? [this.userId] : [this.userId, scope]))
         .all(),
       this.db
         .prepare(
-          "SELECT account_id,transaction_date,balance_effect_minor FROM transactions WHERE balance_effect_minor IS NOT NULL AND user_id=? ORDER BY transaction_date",
+          `SELECT t.account_id,t.transaction_date,t.balance_effect_minor FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id WHERE t.balance_effect_minor IS NOT NULL AND t.user_id=?${joinedAccountScope} ORDER BY t.transaction_date`,
         )
-        .bind(this.userId)
+        .bind(...(scope === "both" ? [this.userId] : [this.userId, scope]))
         .all(),
       this.db
         .prepare(
-          "SELECT * FROM projection_rules WHERE user_id=? AND active=1 ORDER BY start_date,description",
+          `SELECT r.* FROM projection_rules r WHERE r.user_id=? AND r.active=1${scope === "both" ? "" : " AND (r.from_account_id IN (SELECT id FROM accounts WHERE user_id=? AND budget_scope=?) OR r.to_account_id IN (SELECT id FROM accounts WHERE user_id=? AND budget_scope=?))"} ORDER BY r.start_date,r.description`,
         )
-        .bind(this.userId)
+        .bind(
+          ...(scope === "both"
+            ? [this.userId]
+            : [this.userId, this.userId, scope, this.userId, scope]),
+        )
         .all(),
     ]);
     return {
@@ -546,13 +595,15 @@ export class BudgetRepository {
     };
   }
 
-  async listProjectionRules() {
+  async listProjectionRules(scope: BudgetScope = "both") {
     return (
       await this.db
         .prepare(
-          "SELECT r.*,fa.name from_account_name,ta.name to_account_name FROM projection_rules r LEFT JOIN accounts fa ON fa.id=r.from_account_id AND fa.user_id=r.user_id LEFT JOIN accounts ta ON ta.id=r.to_account_id AND ta.user_id=r.user_id WHERE r.user_id=? AND r.active=1 ORDER BY r.start_date,r.description",
+          `SELECT r.*,fa.name from_account_name,ta.name to_account_name FROM projection_rules r LEFT JOIN accounts fa ON fa.id=r.from_account_id AND fa.user_id=r.user_id LEFT JOIN accounts ta ON ta.id=r.to_account_id AND ta.user_id=r.user_id WHERE r.user_id=? AND r.active=1${scope === "both" ? "" : " AND (fa.budget_scope=? OR ta.budget_scope=?)"} ORDER BY r.start_date,r.description`,
         )
-        .bind(this.userId)
+        .bind(
+          ...(scope === "both" ? [this.userId] : [this.userId, scope, scope]),
+        )
         .all()
     ).results;
   }
@@ -650,9 +701,6 @@ export class BudgetRepository {
       ["month", "substr(t.transaction_date,1,7)"],
       ["startDate", "t.transaction_date >="],
       ["endDate", "t.transaction_date <="],
-      ["categoryId", "t.category_id"],
-      ["accountId", "t.account_id"],
-      ["type", "t.transaction_type"],
     ];
     for (const [key, column] of mappings)
       if (params.get(key)) {
@@ -668,10 +716,27 @@ export class BudgetRepository {
       const q = `%${params.get("search")} %`.replace(" %", "%");
       bindings.push(q, q);
     }
-    if (params.get("vendor")) {
-      clauses.push("t.vendor_name LIKE ?");
-      bindings.push(`%${params.get("vendor")}%`);
-    }
+    addInFilter(
+      clauses,
+      bindings,
+      "t.category_id",
+      values(params, "categoryId"),
+    );
+    addInFilter(clauses, bindings, "t.account_id", values(params, "accountId"));
+    addInFilter(
+      clauses,
+      bindings,
+      "t.transaction_type",
+      values(params, "type"),
+    );
+    addInFilter(clauses, bindings, "t.vendor_name", values(params, "vendor"));
+    const scope = values(params, "scope").filter((item) => item !== "both");
+    addInFilter(
+      clauses,
+      bindings,
+      "COALESCE(mc.budget_scope,'personal')",
+      scope,
+    );
     const page = Math.max(1, Number(params.get("page") ?? 1) || 1);
     const pageSize = Math.min(
       100,
@@ -692,12 +757,14 @@ export class BudgetRepository {
       )[params.get("sort") ?? ""] ??
       "t.transaction_date DESC,t.created_at DESC";
     const count = await this.db
-      .prepare(`SELECT count(*) count FROM transactions t ${where}`)
+      .prepare(
+        `SELECT count(*) count FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id ${where}`,
+      )
       .bind(...bindings)
       .first<{ count: number }>();
     const result = await this.db
       .prepare(
-        `SELECT t.*,c.name category_name,a.name account_name FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
+        `SELECT t.*,c.name category_name,a.name account_name,COALESCE(mc.budget_scope,'personal') budget_scope FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       )
       .bind(...bindings, pageSize, (page - 1) * pageSize)
       .all();
@@ -782,9 +849,6 @@ export class BudgetRepository {
     const filters: Array<[string, string]> = [
       ["startDate", "t.transaction_date >="],
       ["endDate", "t.transaction_date <="],
-      ["categoryId", "t.category_id ="],
-      ["accountId", "t.account_id ="],
-      ["type", "t.transaction_type ="],
     ];
     for (const [key, sql] of filters) {
       const value = params.get(key);
@@ -798,13 +862,29 @@ export class BudgetRepository {
       const query = `%${params.get("search")}%`;
       bindings.push(query, query);
     }
-    if (params.get("vendor")) {
-      clauses.push("t.vendor_name LIKE ?");
-      bindings.push(`%${params.get("vendor")}%`);
-    }
+    addInFilter(
+      clauses,
+      bindings,
+      "t.category_id",
+      values(params, "categoryId"),
+    );
+    addInFilter(clauses, bindings, "t.account_id", values(params, "accountId"));
+    addInFilter(
+      clauses,
+      bindings,
+      "t.transaction_type",
+      values(params, "type"),
+    );
+    addInFilter(clauses, bindings, "t.vendor_name", values(params, "vendor"));
+    addInFilter(
+      clauses,
+      bindings,
+      "COALESCE(mc.budget_scope,'personal')",
+      values(params, "scope").filter((item) => item !== "both"),
+    );
     const rows = await this.db
       .prepare(
-        `SELECT t.id FROM transactions t WHERE ${clauses.join(" AND ")} ORDER BY t.transaction_date DESC,t.created_at DESC LIMIT 500`,
+        `SELECT t.id FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE ${clauses.join(" AND ")} ORDER BY t.transaction_date DESC,t.created_at DESC LIMIT 500`,
       )
       .bind(...bindings)
       .all<{ id: string }>();
@@ -916,6 +996,7 @@ export class BudgetRepository {
     endDate: string,
     type: "expense" | "income",
     monthCount: number,
+    scope: BudgetScope,
   ) {
     const effect = type === "expense" ? EXPENSE_EFFECT_SQL : INCOME_EFFECT_SQL;
     const transactionTypeSql =
@@ -925,27 +1006,43 @@ export class BudgetRepository {
     const [categories, accounts, masterCategories, budget] = await Promise.all([
       this.db
         .prepare(
-          `SELECT c.id,c.name,c.master_category_id,c.monthly_budget_minor,COALESCE(SUM(${effect}),0) amount_minor,COUNT(t.id) transaction_count,COALESCE(SUM(CASE WHEN t.transaction_type='refund' OR t.transaction_direction=${type === "expense" ? "'credit'" : "'debit'"} THEN t.amount_minor ELSE 0 END),0) reversal_minor FROM categories c LEFT JOIN transactions t ON t.category_id=c.id AND t.user_id=c.user_id AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} WHERE c.user_id=? AND c.active=1 AND c.kind=? GROUP BY c.id,c.name,c.master_category_id,c.monthly_budget_minor ORDER BY amount_minor DESC,c.name`,
+          `SELECT c.id,c.name,c.master_category_id,c.monthly_budget_minor,COALESCE(SUM(${effect}),0) amount_minor,COUNT(t.id) transaction_count,COALESCE(SUM(CASE WHEN t.transaction_type='refund' OR t.transaction_direction=${type === "expense" ? "'credit'" : "'debit'"} THEN t.amount_minor ELSE 0 END),0) reversal_minor FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id LEFT JOIN transactions t ON t.category_id=c.id AND t.user_id=c.user_id AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} WHERE c.user_id=? AND c.active=1 AND c.kind=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY c.id,c.name,c.master_category_id,c.monthly_budget_minor ORDER BY amount_minor DESC,c.name`,
         )
-        .bind(startDate, endDate, this.userId, type)
+        .bind(
+          startDate,
+          endDate,
+          this.userId,
+          type,
+          ...(scope === "both" ? [] : [scope]),
+        )
         .all(),
       this.db
         .prepare(
-          `SELECT a.id,a.name,COALESCE(c.master_category_id,'unassigned') master_category_id,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} GROUP BY a.id,a.name,c.master_category_id ORDER BY amount_minor DESC`,
+          `SELECT a.id,a.name,COALESCE(c.master_category_id,'unassigned') master_category_id,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql}${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY a.id,a.name,c.master_category_id ORDER BY amount_minor DESC`,
         )
-        .bind(this.userId, startDate, endDate)
+        .bind(
+          this.userId,
+          startDate,
+          endDate,
+          ...(scope === "both" ? [] : [scope]),
+        )
         .all(),
       this.db
         .prepare(
-          `SELECT COALESCE(mc.id,'unassigned') id,COALESCE(mc.name,'Unassigned') name,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} GROUP BY mc.id,mc.name ORDER BY amount_minor DESC`,
+          `SELECT COALESCE(mc.id,'unassigned') id,COALESCE(mc.name,'Unassigned') name,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql}${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY mc.id,mc.name ORDER BY amount_minor DESC`,
         )
-        .bind(this.userId, startDate, endDate)
+        .bind(
+          this.userId,
+          startDate,
+          endDate,
+          ...(scope === "both" ? [] : [scope]),
+        )
         .all(),
       this.db
         .prepare(
-          "SELECT COALESCE(SUM(monthly_budget_minor),0) total FROM categories WHERE user_id=? AND active=1 AND kind=?",
+          `SELECT COALESCE(SUM(c.monthly_budget_minor),0) total FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE c.user_id=? AND c.active=1 AND c.kind=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")}`,
         )
-        .bind(this.userId, type)
+        .bind(this.userId, type, ...(scope === "both" ? [] : [scope]))
         .first<{ total: number }>(),
     ]);
     return {
@@ -956,12 +1053,21 @@ export class BudgetRepository {
     };
   }
 
-  async rangeSummary(startDate: string, endDate: string) {
+  async rangeSummary(
+    startDate: string,
+    endDate: string,
+    scope: BudgetScope = "both",
+  ) {
     const totals = await this.db
       .prepare(
-        `SELECT SUM(CASE WHEN t.transaction_type='income' THEN ${INCOME_EFFECT_SQL} ELSE 0 END) income_minor,SUM(CASE WHEN t.transaction_type IN ('expense','refund') THEN ${EXPENSE_EFFECT_SQL} ELSE 0 END) expense_minor,SUM(CASE WHEN t.transaction_type NOT IN ('transfer') THEN 1 ELSE 0 END) transaction_count FROM transactions t WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ?`,
+        `SELECT SUM(CASE WHEN t.transaction_type='income' THEN ${INCOME_EFFECT_SQL} ELSE 0 END) income_minor,SUM(CASE WHEN t.transaction_type IN ('expense','refund') THEN ${EXPENSE_EFFECT_SQL} ELSE 0 END) expense_minor,SUM(CASE WHEN t.transaction_type NOT IN ('transfer') THEN 1 ELSE 0 END) transaction_count FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")}`,
       )
-      .bind(this.userId, startDate, endDate)
+      .bind(
+        this.userId,
+        startDate,
+        endDate,
+        ...(scope === "both" ? [] : [scope]),
+      )
       .first<Record<string, number>>();
     const income = totals?.income_minor ?? 0,
       expense = totals?.expense_minor ?? 0;
@@ -972,8 +1078,8 @@ export class BudgetRepository {
     const monthCount =
       (endYear! - startYear!) * 12 + endMonthNumber! - startMonthNumber! + 1;
     const [expenseActivity, incomeActivity] = await Promise.all([
-      this.activityBreakdown(startDate, endDate, "expense", monthCount),
-      this.activityBreakdown(startDate, endDate, "income", monthCount),
+      this.activityBreakdown(startDate, endDate, "expense", monthCount, scope),
+      this.activityBreakdown(startDate, endDate, "income", monthCount, scope),
     ]);
     const totalBudgetMinor = expenseActivity.totalBudgetMinor;
     return {
@@ -1012,6 +1118,17 @@ export class BudgetRepository {
     return results.reduce((sum, result) => sum + (result.meta.changes ?? 0), 0);
   }
 
+  async listBudgetCategories(scope: BudgetScope = "both") {
+    return (
+      await this.db
+        .prepare(
+          `SELECT c.*,COALESCE(mc.budget_scope,'personal') budget_scope FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE c.user_id=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} ORDER BY c.active DESC,c.name`,
+        )
+        .bind(...(scope === "both" ? [this.userId] : [this.userId, scope]))
+        .all()
+    ).results;
+  }
+
   async spendingTrend(
     startDate: string,
     endDate: string,
@@ -1019,6 +1136,7 @@ export class BudgetRepository {
     categoryId?: string,
     masterCategoryId?: string,
     accountId?: string,
+    scope: BudgetScope = "both",
   ) {
     const clauses = [
       "t.user_id=?",
@@ -1040,9 +1158,13 @@ export class BudgetRepository {
       clauses.push("t.account_id=?");
       bindings.push(accountId);
     }
+    if (scope !== "both") {
+      clauses.push("COALESCE(mc.budget_scope,'personal')=?");
+      bindings.push(scope);
+    }
     const actualRows = await this.db
       .prepare(
-        `SELECT substr(t.transaction_date,1,7) month,SUM(${type === "expense" ? EXPENSE_EFFECT_SQL : INCOME_EFFECT_SQL}) actual_minor FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id WHERE ${clauses.join(" AND ")} GROUP BY month ORDER BY month`,
+        `SELECT substr(t.transaction_date,1,7) month,SUM(${type === "expense" ? EXPENSE_EFFECT_SQL : INCOME_EFFECT_SQL}) actual_minor FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE ${clauses.join(" AND ")} GROUP BY month ORDER BY month`,
       )
       .bind(...bindings)
       .all<{ month: string; actual_minor: number }>();
@@ -1055,6 +1177,12 @@ export class BudgetRepository {
     if (masterCategoryId) {
       budgetClauses.push("master_category_id=?");
       budgetBindings.push(masterCategoryId);
+    }
+    if (scope !== "both") {
+      budgetClauses.push(
+        "COALESCE((SELECT budget_scope FROM master_categories WHERE id=categories.master_category_id AND user_id=categories.user_id),'personal')=?",
+      );
+      budgetBindings.push(scope);
     }
     const budget = await this.db
       .prepare(
@@ -1084,7 +1212,11 @@ export class BudgetRepository {
     }));
   }
 
-  async cashFlowTrend(startDate: string, endDate: string) {
+  async cashFlowTrend(
+    startDate: string,
+    endDate: string,
+    scope: BudgetScope = "both",
+  ) {
     const months: string[] = [];
     const cursor = new Date(`${startDate.slice(0, 7)}-01T00:00:00Z`);
     const end = new Date(`${endDate.slice(0, 7)}-01T00:00:00Z`);
@@ -1102,9 +1234,14 @@ export class BudgetRepository {
       const [actual, budgets] = await Promise.all([
         this.db
           .prepare(
-            `SELECT substr(t.transaction_date,1,7) month,COALESCE(mc.id,'unassigned') master_id,COALESCE(mc.name,'Unassigned') master_name,SUM(${effect}) actual_minor FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionClause} GROUP BY month,mc.id,mc.name ORDER BY month,master_name`,
+            `SELECT substr(t.transaction_date,1,7) month,COALESCE(mc.id,'unassigned') master_id,COALESCE(mc.name,'Unassigned') master_name,SUM(${effect}) actual_minor FROM transactions t JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionClause}${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY month,mc.id,mc.name ORDER BY month,master_name`,
           )
-          .bind(this.userId, startDate, endDate)
+          .bind(
+            this.userId,
+            startDate,
+            endDate,
+            ...(scope === "both" ? [] : [scope]),
+          )
           .all<{
             month: string;
             master_id: string;
@@ -1113,9 +1250,9 @@ export class BudgetRepository {
           }>(),
         this.db
           .prepare(
-            "SELECT COALESCE(mc.id,'unassigned') master_id,COALESCE(mc.name,'Unassigned') master_name,COALESCE(SUM(c.monthly_budget_minor),0) budget_minor FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE c.user_id=? AND c.active=1 AND c.kind=? GROUP BY mc.id,mc.name ORDER BY master_name",
+            `SELECT COALESCE(mc.id,'unassigned') master_id,COALESCE(mc.name,'Unassigned') master_name,COALESCE(SUM(c.monthly_budget_minor),0) budget_minor FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE c.user_id=? AND c.active=1 AND c.kind=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY mc.id,mc.name ORDER BY master_name`,
           )
-          .bind(this.userId, type)
+          .bind(this.userId, type, ...(scope === "both" ? [] : [scope]))
           .all<{
             master_id: string;
             master_name: string;

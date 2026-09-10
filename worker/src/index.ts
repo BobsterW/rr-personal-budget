@@ -71,6 +71,18 @@ const PROJECTION_RULE_FREQUENCIES = new Set<ProjectionRuleFrequency>([
   "yearly",
   "once",
 ]);
+type BudgetScope = "personal" | "business" | "both";
+const BUDGET_SCOPES = new Set<BudgetScope>(["personal", "business", "both"]);
+function budgetScope(value: string | null): BudgetScope {
+  const scope = (value ?? "both") as BudgetScope;
+  if (!BUDGET_SCOPES.has(scope))
+    throw new ApiError(
+      422,
+      "VALIDATION_ERROR",
+      "scope must be personal, business, or both.",
+    );
+  return scope;
+}
 
 // Credentialed CORS is emitted only for an explicitly configured frontend.
 function cors(request: Request, env: Env): Record<string, string> {
@@ -156,11 +168,12 @@ interface WorkspaceAccess {
   role: WorkspaceRole;
   dataOwnerUserId: string;
   ownerUsername: string;
+  separatePersonalBusiness: boolean;
 }
 async function listWorkspaces(db: D1Database, userId: string) {
   const result = await db
     .prepare(
-      "SELECT w.id,w.name,m.role,owner.username owner_username FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id JOIN users owner ON owner.id=w.data_owner_user_id WHERE m.user_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END,w.name",
+      "SELECT w.id,w.name,m.role,owner.username owner_username,w.separate_personal_business FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id JOIN users owner ON owner.id=w.data_owner_user_id WHERE m.user_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END,w.name",
     )
     .bind(userId)
     .all<Record<string, unknown>>();
@@ -174,7 +187,7 @@ async function workspaceAccess(
   const requested = request.headers.get("x-workspace-id");
   const row = await db
     .prepare(
-      `SELECT w.id,w.name,w.data_owner_user_id,m.role,owner.username owner_username FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id JOIN users owner ON owner.id=w.data_owner_user_id WHERE m.user_id=? ${requested ? "AND w.id=?" : "ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END LIMIT 1"}`,
+      `SELECT w.id,w.name,w.data_owner_user_id,m.role,owner.username owner_username,w.separate_personal_business FROM workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id JOIN users owner ON owner.id=w.data_owner_user_id WHERE m.user_id=? ${requested ? "AND w.id=?" : "ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END LIMIT 1"}`,
     )
     .bind(...(requested ? [userId, requested] : [userId]))
     .first<{
@@ -183,6 +196,7 @@ async function workspaceAccess(
       data_owner_user_id: string;
       role: WorkspaceRole;
       owner_username: string;
+      separate_personal_business: number;
     }>();
   if (!row)
     throw new ApiError(
@@ -196,6 +210,7 @@ async function workspaceAccess(
     role: row.role,
     dataOwnerUserId: row.data_owner_user_id,
     ownerUsername: row.owner_username,
+    separatePersonalBusiness: Boolean(row.separate_personal_business),
   };
 }
 function assertWorkspacePermission(
@@ -225,7 +240,8 @@ function assertWorkspacePermission(
       path === "/api/v1/projection" ||
       path === "/api/v1/balance-snapshots" ||
       path === "/api/v1/projection-rules" ||
-      path === "/api/v1/website-preferences");
+      path === "/api/v1/website-preferences" ||
+      path === "/api/v1/budget-structure");
   if (!viewerRead)
     throw new ApiError(
       403,
@@ -267,12 +283,19 @@ function accountInput(body: Record<string, unknown>) {
   const liquidityClass = String(
     body.liquidityClass ?? "liquid",
   ) as LiquidityClass;
+  const scope = String(body.budgetScope ?? "personal");
   if (!ACCOUNT_TYPES.has(accountType))
     throw new ApiError(422, "VALIDATION_ERROR", "Invalid account type.");
   if (!PAYMENT_FREQUENCIES.has(paymentFrequency))
     throw new ApiError(422, "VALIDATION_ERROR", "Invalid payment frequency.");
   if (!LIQUIDITY_CLASSES.has(liquidityClass))
     throw new ApiError(422, "VALIDATION_ERROR", "Invalid liquidity class.");
+  if (scope !== "personal" && scope !== "business")
+    throw new ApiError(
+      422,
+      "VALIDATION_ERROR",
+      "Invalid account budget group.",
+    );
   const integerFields = [
     "annualGrowthBps",
     "paymentAmountMinor",
@@ -306,6 +329,7 @@ function accountInput(body: Record<string, unknown>) {
     accountType,
     paymentFrequency,
     liquidityClass,
+    budgetScope: scope,
     ...values,
     projectionNotes:
       typeof body.projectionNotes === "string"
@@ -662,6 +686,39 @@ async function route(request: Request, env: Env): Promise<Response> {
   const workspace = await workspaceAccess(request, env.DB, user.id);
   assertWorkspacePermission(workspace.role, path, method);
   const repo = new BudgetRepository(env.DB, workspace.dataOwnerUserId);
+
+  if (path === "/api/v1/budget-structure" && method === "GET")
+    return json({
+      data: {
+        separatePersonalBusiness: workspace.separatePersonalBusiness,
+      },
+    });
+  if (path === "/api/v1/budget-structure" && method === "PUT") {
+    const body = assertObject(await readJson(request));
+    if (typeof body.separatePersonalBusiness !== "boolean")
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "separatePersonalBusiness must be true or false.",
+      );
+    await env.DB.prepare(
+      "UPDATE workspaces SET separate_personal_business=?,updated_at=? WHERE id=?",
+    )
+      .bind(
+        body.separatePersonalBusiness ? 1 : 0,
+        new Date().toISOString(),
+        workspace.id,
+      )
+      .run();
+    return json({ data: body });
+  }
+
+  if (path === "/api/v1/transaction-vendors" && method === "GET")
+    return json({
+      data: (await repo.listVendors()).map((row) =>
+        toCamel(row as Record<string, unknown>),
+      ),
+    });
 
   if (path === "/api/v1/workspace" && method === "GET")
     return json({
@@ -1021,21 +1078,33 @@ async function route(request: Request, env: Env): Promise<Response> {
       data: (await repo.listMasterCategories()).map((row) => toCamel(row)),
     });
   if (path === "/api/v1/master-categories" && method === "POST") {
-    const name = requireString(
-      assertObject(await readJson(request)),
-      "name",
-      80,
-    );
+    const body = assertObject(await readJson(request));
+    const name = requireString(body, "name", 80);
+    const scope = String(body.budgetScope ?? "personal");
+    if (scope !== "personal" && scope !== "business")
+      throw new ApiError(422, "VALIDATION_ERROR", "Invalid budget group.");
     return json(
       {
         data: toCamel(
-          (await repo.createMasterCategory(name)) as Record<string, unknown>,
+          (await repo.createMasterCategory(name, scope)) as Record<
+            string,
+            unknown
+          >,
         ),
       },
       201,
     );
   }
   const masterMatch = path.match(/^\/api\/v1\/master-categories\/([^/]+)$/);
+  if (masterMatch && method === "PUT") {
+    const body = assertObject(await readJson(request));
+    const scope = requireString(body, "budgetScope");
+    if (scope !== "personal" && scope !== "business")
+      throw new ApiError(422, "VALIDATION_ERROR", "Invalid budget group.");
+    if (!(await repo.updateMasterCategoryScope(masterMatch[1]!, scope)))
+      throw new ApiError(404, "NOT_FOUND", "Master category not found.");
+    return json({ data: { id: masterMatch[1], budgetScope: scope } });
+  }
   if (masterMatch && method === "DELETE") {
     if (!(await repo.archiveMasterCategory(masterMatch[1]!)))
       throw new ApiError(404, "NOT_FOUND", "Master category not found.");
@@ -1307,12 +1376,20 @@ async function route(request: Request, env: Env): Promise<Response> {
         "VALIDATION_ERROR",
         "startDate must be on or before endDate.",
       );
-    return json({ data: await repo.rangeSummary(startDate, endDate) });
+    return json({
+      data: await repo.rangeSummary(
+        startDate,
+        endDate,
+        budgetScope(url.searchParams.get("scope")),
+      ),
+    });
   }
   if (path === "/api/v1/budgets" && method === "GET") {
-    const categories = (await repo.listLookup("categories")).map((row) =>
-      toCamel(row),
-    );
+    const categories = (
+      await repo.listBudgetCategories(
+        budgetScope(url.searchParams.get("scope")),
+      )
+    ).map((row) => toCamel(row));
     return json({ data: categories });
   }
   if (path === "/api/v1/budgets" && method === "PUT") {
@@ -1370,6 +1447,7 @@ async function route(request: Request, env: Env): Promise<Response> {
         url.searchParams.get("categoryId") ?? undefined,
         url.searchParams.get("masterCategoryId") ?? undefined,
         url.searchParams.get("accountId") ?? undefined,
+        budgetScope(url.searchParams.get("scope")),
       ),
     });
   }
@@ -1385,7 +1463,13 @@ async function route(request: Request, env: Env): Promise<Response> {
         "VALIDATION_ERROR",
         "startDate must be on or before endDate.",
       );
-    return json({ data: await repo.cashFlowTrend(startDate, endDate) });
+    return json({
+      data: await repo.cashFlowTrend(
+        startDate,
+        endDate,
+        budgetScope(url.searchParams.get("scope")),
+      ),
+    });
   }
 
   if (path === "/api/v1/website-preferences" && method === "GET") {
@@ -1435,7 +1519,11 @@ async function route(request: Request, env: Env): Promise<Response> {
   );
   if (path === "/api/v1/projection-rules" && method === "GET")
     return json({
-      data: (await repo.listProjectionRules()).map((row) => toCamel(row)),
+      data: (
+        await repo.listProjectionRules(
+          budgetScope(url.searchParams.get("scope")),
+        )
+      ).map((row) => toCamel(row)),
     });
   if (
     (path === "/api/v1/projection-rules" && method === "POST") ||
@@ -1565,7 +1653,9 @@ async function route(request: Request, env: Env): Promise<Response> {
         "CONFIGURATION_ERROR",
         "Projection assumptions are missing.",
       );
-    const raw = await repo.timelineData();
+    const raw = await repo.timelineData(
+      budgetScope(url.searchParams.get("scope")),
+    );
     const accounts: TimelineAccount[] = raw.accounts.map((row) => {
       const item = toCamel(row);
       return {
@@ -1632,10 +1722,15 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/api/v1/balance-snapshots" && method === "GET") {
+    const scope = budgetScope(url.searchParams.get("scope"));
     const rows = await env.DB.prepare(
-      "SELECT s.*,a.name account_name,a.account_type FROM balance_snapshots s JOIN accounts a ON a.id=s.account_id AND a.user_id=s.user_id WHERE s.user_id=? ORDER BY snapshot_date,account_name",
+      `SELECT s.*,a.name account_name,a.account_type FROM balance_snapshots s JOIN accounts a ON a.id=s.account_id AND a.user_id=s.user_id WHERE s.user_id=?${scope === "both" ? "" : " AND a.budget_scope=?"} ORDER BY snapshot_date,account_name`,
     )
-      .bind(workspace.dataOwnerUserId)
+      .bind(
+        ...(scope === "both"
+          ? [workspace.dataOwnerUserId]
+          : [workspace.dataOwnerUserId, scope]),
+      )
       .all();
     return json({ data: rows.results.map((row) => toCamel(row)) });
   }
@@ -1756,6 +1851,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (path === "/api/v1/projection" && method === "GET") {
+    const scope = budgetScope(url.searchParams.get("scope"));
     const row = await env.DB.prepare(
       "SELECT * FROM projection_assumptions WHERE user_id=?",
     )
@@ -1768,9 +1864,13 @@ async function route(request: Request, env: Env): Promise<Response> {
         "Projection assumptions are missing.",
       );
     const accountRows = await env.DB.prepare(
-      "WITH latest AS (SELECT account_id,MAX(snapshot_date) d FROM balance_snapshots WHERE user_id=? GROUP BY account_id) SELECT a.*,COALESCE(s.balance_minor,0) balance_minor FROM accounts a LEFT JOIN latest l ON l.account_id=a.id LEFT JOIN balance_snapshots s ON s.account_id=l.account_id AND s.snapshot_date=l.d AND s.user_id=a.user_id WHERE a.user_id=? AND a.active=1 ORDER BY a.name",
+      `WITH latest AS (SELECT account_id,MAX(snapshot_date) d FROM balance_snapshots WHERE user_id=? GROUP BY account_id) SELECT a.*,COALESCE(s.balance_minor,0) balance_minor FROM accounts a LEFT JOIN latest l ON l.account_id=a.id LEFT JOIN balance_snapshots s ON s.account_id=l.account_id AND s.snapshot_date=l.d AND s.user_id=a.user_id WHERE a.user_id=? AND a.active=1${scope === "both" ? "" : " AND a.budget_scope=?"} ORDER BY a.name`,
     )
-      .bind(workspace.dataOwnerUserId, workspace.dataOwnerUserId)
+      .bind(
+        workspace.dataOwnerUserId,
+        workspace.dataOwnerUserId,
+        ...(scope === "both" ? [] : [scope]),
+      )
       .all();
     const assumptions: ProjectionAssumptions = {
       monthlyIncomeMinor: row.monthly_income_minor!,

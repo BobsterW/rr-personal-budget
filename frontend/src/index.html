@@ -8,7 +8,7 @@
       content="Private transaction, monthly spending, and net-worth tracker."
     />
     <title>R&R Budget</title>
-    <link rel="stylesheet" href="styles.css?v=7.13.3" />
+    <link rel="stylesheet" href="styles.css?v=7.14" />
   </head>
   <body>
     <!-- Authentication is the only visible section until /auth/me confirms a session. -->
@@ -124,7 +124,6 @@
           ><span class="sr-only">Budget</span
           ><select id="workspace-select" aria-label="Choose budget"></select
         ></label>
-        <span id="workspace-context" class="workspace-context"></span>
         <span class="user-avatar" aria-hidden="true">●</span
         ><span id="current-username"></span
         ><button id="logout" class="secondary">
@@ -188,30 +187,39 @@
             >Search<input
               id="transaction-search"
               type="search"
-              placeholder="Vendor or description" /></label
-          ><label
-            >Vendor<input
-              id="transaction-vendor-filter"
-              type="search"
-              placeholder="Vendor contains…" /></label
-          ><label
-            >Category<select id="transaction-category-filter">
-              <option value="">All categories</option>
-            </select></label
-          ><label
-            >Account<select id="transaction-account-filter">
-              <option value="">All accounts</option>
-            </select></label
-          ><label
-            >Type<select id="transaction-type-filter">
-              <option value="">All types</option>
-              <option>expense</option>
-              <option>refund</option>
-              <option>income</option>
-              <option>transfer</option>
-              <option>adjustment</option>
-            </select></label
-          ><label
+              placeholder="Vendor or description"
+          /></label>
+          <details class="filter-multiselect" data-transaction-filter="vendor">
+            <summary>Vendor <strong>All</strong></summary>
+            <div class="filter-menu" id="transaction-vendor-filter"></div>
+          </details>
+          <details
+            class="filter-multiselect"
+            data-transaction-filter="categoryId"
+          >
+            <summary>Category <strong>All</strong></summary>
+            <div class="filter-menu" id="transaction-category-filter"></div>
+          </details>
+          <details
+            class="filter-multiselect"
+            data-transaction-filter="accountId"
+          >
+            <summary>Account <strong>All</strong></summary>
+            <div class="filter-menu" id="transaction-account-filter"></div>
+          </details>
+          <details class="filter-multiselect" data-transaction-filter="type">
+            <summary>Type <strong>All</strong></summary>
+            <div class="filter-menu" id="transaction-type-filter"></div>
+          </details>
+          <details
+            class="filter-multiselect scope-only"
+            data-transaction-filter="scope"
+            hidden
+          >
+            <summary>Personal / business <strong>All</strong></summary>
+            <div class="filter-menu" id="transaction-scope-filter"></div>
+          </details>
+          <label
             >Sort<select id="transaction-sort">
               <option value="date-desc">Newest first</option>
               <option value="date-asc">Oldest first</option>
@@ -292,6 +300,12 @@
             <label
               >Start date<input id="summary-start-date" type="date" /></label
             ><label>End date<input id="summary-end-date" type="date" /></label
+            ><label class="scope-only" hidden
+              >Budget group<select id="summary-scope-filter">
+                <option value="both">Both</option>
+                <option value="personal">Personal</option>
+                <option value="business">Business</option>
+              </select></label
             ><button id="apply-summary-range">Apply</button>
           </div>
         </div>
@@ -379,10 +393,6 @@
           <section class="panel">
             <h2 id="activity-account-title">Expenses by account</h2>
             <div id="account-bars" class="bars"></div>
-          </section>
-          <section class="panel">
-            <h2 id="activity-budget-title">Category budget tracking</h2>
-            <div id="category-budget-status" class="budget-status"></div>
           </section>
           <div class="monthly-trend-stack">
             <section class="panel">
@@ -484,6 +494,15 @@
             <h1>Budget</h1>
             <p>Set a monthly target for every expense and income category.</p>
           </div>
+          <div class="hero-actions scope-only" hidden>
+            <label
+              >Budget group<select id="budget-scope-filter">
+                <option value="both">Both</option>
+                <option value="personal">Personal</option>
+                <option value="business">Business</option>
+              </select></label
+            >
+          </div>
         </div>
         <form id="budget-form">
           <div class="split">
@@ -523,6 +542,13 @@
               >Start date<input id="networth-start-date" type="date"
             /></label>
             <label>End date<input id="networth-end-date" type="date" /></label>
+            <label class="scope-only" hidden
+              >Budget group<select id="networth-scope-filter">
+                <option value="both">Both</option>
+                <option value="personal">Personal</option>
+                <option value="business">Business</option>
+              </select></label
+            >
             <button id="apply-networth-range">Apply</button>
           </div>
         </div>
@@ -663,13 +689,44 @@
                 Group detailed categories into the smaller set shown in Monthly
                 Activity.
               </p>
+              <div class="business-separation-setting">
+                <span
+                  ><strong>Separate Personal and Business?</strong
+                  ><small>Off keeps one combined budget.</small></span
+                >
+                <div
+                  class="segmented-toggle"
+                  role="group"
+                  aria-label="Separate Personal and Business"
+                >
+                  <button
+                    type="button"
+                    class="secondary structure-toggle"
+                    data-separate="false"
+                  >
+                    No
+                  </button>
+                  <button
+                    type="button"
+                    class="secondary structure-toggle"
+                    data-separate="true"
+                  >
+                    Yes
+                  </button>
+                </div>
+              </div>
               <form id="master-category-form" class="inline-form">
                 <input
                   name="name"
                   placeholder="Example: Essentials"
                   maxlength="80"
                   required
-                /><button>Add</button>
+                /><label class="master-scope-field scope-only" hidden
+                  >Budget group<select name="budgetScope">
+                    <option value="personal">Personal</option>
+                    <option value="business">Business</option>
+                  </select></label
+                ><button>Add</button>
               </form>
               <ul id="master-categories-list" class="settings-list"></ul>
             </div>
@@ -1056,6 +1113,12 @@
               <option value="fixed">Fixed</option>
             </select></label
           >
+          <label class="scope-only" hidden
+            >Budget group<select name="budgetScope" required>
+              <option value="personal">Personal</option>
+              <option value="business">Business</option>
+            </select></label
+          >
           <label
             >Interest due (% yearly)<input
               name="annualInterest"
@@ -1147,6 +1210,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.13.3"></script>
+    <script type="module" src="app.js?v=7.14"></script>
   </body>
 </html>

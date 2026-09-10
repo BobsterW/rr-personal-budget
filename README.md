@@ -1,6 +1,13 @@
-# R&R Budget v7.13.3
+# R&R Budget v7.14
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.14 changes
+
+- Adds optional Personal and Business budget groups across transactions, monthly activity, budgets, and net worth.
+- Makes every transaction drop-down filter multi-select, including vendor, category, account, type, and budget group.
+- Combines category actuals, budgets, and remaining/over amounts into the interactive ranked bars.
+- Hides edit-only navigation from viewers and always labels the expanded sidebar with the active budget owner's username.
 
 ## V7.13.3 changes
 
