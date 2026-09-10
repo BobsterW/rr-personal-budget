@@ -85,15 +85,7 @@ const defaultWebsiteColors = {
   chartAccentColor: "#16211d",
 };
 const themePresets = {
-  original: defaultWebsiteColors,
-  forest: {
-    ...defaultWebsiteColors,
-    highlightColor: "#236b4e",
-    backgroundColor: "#edf3e8",
-    cardColor: "#fbfff8",
-    positiveColor: "#26734f",
-    chartAccentColor: "#123d2d",
-  },
+  classic: defaultWebsiteColors,
   ocean: {
     ...defaultWebsiteColors,
     highlightColor: "#176b87",
@@ -102,6 +94,70 @@ const themePresets = {
     positiveColor: "#17765f",
     negativeColor: "#b04444",
     chartAccentColor: "#123f58",
+  },
+  sage: {
+    ...defaultWebsiteColors,
+    highlightColor: "#55705a",
+    backgroundColor: "#eef2e8",
+    cardColor: "#fbfdf7",
+    positiveColor: "#397052",
+    negativeColor: "#a34f45",
+    chartAccentColor: "#2f4637",
+  },
+  sand: {
+    ...defaultWebsiteColors,
+    highlightColor: "#8a643f",
+    backgroundColor: "#f5eddf",
+    cardColor: "#fffaf0",
+    positiveColor: "#4d7657",
+    negativeColor: "#a9473c",
+    chartAccentColor: "#49382a",
+  },
+  burgundy: {
+    ...defaultWebsiteColors,
+    highlightColor: "#7b2942",
+    backgroundColor: "#f5e9ed",
+    cardColor: "#fffafb",
+    positiveColor: "#32705a",
+    negativeColor: "#a12c47",
+    chartAccentColor: "#4c1d2d",
+  },
+  plum: {
+    ...defaultWebsiteColors,
+    highlightColor: "#67416f",
+    backgroundColor: "#f1ebf4",
+    cardColor: "#fefbff",
+    positiveColor: "#39705b",
+    negativeColor: "#a74357",
+    chartAccentColor: "#43274a",
+  },
+  slate: {
+    ...defaultWebsiteColors,
+    highlightColor: "#465d6b",
+    backgroundColor: "#eaf0f2",
+    cardColor: "#fbfdfe",
+    positiveColor: "#32705d",
+    negativeColor: "#a7433b",
+    chartAccentColor: "#263a45",
+  },
+  midnight: {
+    ...defaultWebsiteColors,
+    highlightColor: "#243f67",
+    backgroundColor: "#e8edf5",
+    cardColor: "#fafcff",
+    textColor: "#16233a",
+    positiveColor: "#28715b",
+    negativeColor: "#aa3f4b",
+    chartAccentColor: "#172d4d",
+  },
+  terracotta: {
+    ...defaultWebsiteColors,
+    highlightColor: "#a4513d",
+    backgroundColor: "#f6e9df",
+    cardColor: "#fffaf5",
+    positiveColor: "#47745a",
+    negativeColor: "#ad4436",
+    chartAccentColor: "#5d3328",
   },
   contrast: {
     ...defaultWebsiteColors,
@@ -129,6 +185,12 @@ function applyWebsiteColors(colors) {
   if (form)
     for (const [name, color] of Object.entries(value))
       if (form.elements[name]) form.elements[name].value = color;
+  const preset = Object.entries(themePresets).find(([, candidate]) =>
+    Object.keys(defaultWebsiteColors).every(
+      (key) => candidate[key] === value[key],
+    ),
+  );
+  if ($("#default-theme")) $("#default-theme").value = preset?.[0] ?? "custom";
 }
 function colorContrast(first, second) {
   const luminance = (hex) => {
@@ -253,7 +315,7 @@ async function enterApp(user) {
   $("#auth-screen").hidden = true;
   $$(".app-shell").forEach((element) => (element.hidden = false));
   $("#current-username").textContent = user.username;
-  $("#brand-name").textContent = `${user.username}'s`;
+  updateWorkspaceIdentity();
   $("#welcome-back").textContent = `Welcome back, ${user.username}.`;
   $("#admin-nav").hidden = user.platformRole !== "admin";
   const workspaceSelect = $("#workspace-select");
@@ -281,6 +343,9 @@ function applyRoleVisibility() {
     const link = $(`#app-sidebar a[href="#${id}"]`);
     if (link) link.hidden = viewer;
   }
+  // The logo is also a navigation entry. Viewers must not be sent to the
+  // Transactions route by clicking it after the Transactions link is hidden.
+  $("#sidebar-brand").href = viewer ? "#spending" : "#transactions";
   $("#workspace-access-card")?.toggleAttribute(
     "hidden",
     state.workspaceRole !== "owner",
@@ -294,6 +359,32 @@ function applyRoleVisibility() {
     ["#transactions", "#budget", "#settings"].includes(window.location.hash)
   )
     window.location.hash = "spending";
+}
+function updateWorkspaceIdentity() {
+  const workspace = state.user?.workspaces?.find(
+    (item) => item.id === state.workspaceId,
+  );
+  const ownerUsername =
+    workspace?.ownerUsername ?? state.user?.username ?? "My";
+  $("#brand-name").textContent = `${ownerUsername}'s`;
+  $("#workspace-context").textContent = workspace
+    ? `${ownerUsername}'s Budget · ${workspace.role}`
+    : "Current budget";
+}
+async function refreshWorkspaceIdentity() {
+  // Refresh memberships after a workspace switch so role-based navigation and
+  // owner branding never depend on an old login response.
+  const selectedWorkspaceId = state.workspaceId;
+  const result = await api("/api/v1/auth/me");
+  state.user = { ...state.user, ...result.data };
+  state.workspaceId = selectedWorkspaceId;
+  const workspace = state.user.workspaces.find(
+    (item) => item.id === selectedWorkspaceId,
+  );
+  state.workspaceRole = workspace?.role ?? null;
+  if (!workspace) throw new Error("You no longer have access to this budget.");
+  updateWorkspaceIdentity();
+  applyRoleVisibility();
 }
 // Reusable, non-blocking status message for forms and background operations.
 function notify(message, isError = false) {
@@ -787,7 +878,9 @@ function setActivityMode(mode) {
   $("#activity-detail-view").hidden = cashFlow;
   $("#cashflow-view").hidden = !cashFlow;
   if (cashFlow) {
-    void loadCashFlow();
+    $("#cashflow-chart").innerHTML =
+      '<div class="chart-status">Loading cash-flow chart…</div>';
+    void run(loadCashFlow);
     return;
   }
   const income = mode === "income";
@@ -1026,6 +1119,19 @@ function drawCashFlowChart() {
         notation: Math.abs(minor) >= 100000 ? "compact" : "standard",
         maximumFractionDigits: Math.abs(minor) >= 100000 ? 1 : 0,
       }).format(dollars(minor));
+  if (!expenseRows.length && !incomeRows.length) {
+    $("#cashflow-chart").innerHTML =
+      '<div class="empty">Select at least one expense or income master category to draw the cash-flow chart.</div>';
+    return;
+  }
+  // Resolve colors before creating the SVG. This avoids browser differences
+  // around CSS custom properties inside dynamically inserted SVG attributes.
+  const colors = {
+    income: state.websiteColors?.positiveColor ?? "#185b45",
+    expense: state.websiteColors?.negativeColor ?? "#a33b32",
+    cash: state.websiteColors?.chartAccentColor ?? "#16211d",
+    card: state.websiteColors?.cardColor ?? "#fffdf7",
+  };
   const grid = [-1, -0.5, 0, 0.5, 1]
     .map(
       (ratio) =>
@@ -1043,13 +1149,13 @@ function drawCashFlowChart() {
         const color =
           state.cashFlowColorBy === "type"
             ? direction > 0
-              ? "var(--positive)"
-              : "var(--danger)"
+              ? colors.income
+              : colors.expense
             : stableSeriesColor(
                 row.id ?? row.name,
                 direction > 0 ? "income" : "expense",
               );
-        const markup = `<path class="cashflow-area" style="fill:${color}" d="${area(lower, upper)}"><title>${escapeHtml(row.name)}</title></path>`;
+        const markup = `<path class="cashflow-area" fill="${color}" fill-opacity="0.72" stroke="${color}" stroke-width="2" d="${area(lower, upper)}"><title>${escapeHtml(row.name)}</title></path>`;
         lower = upper;
         return markup;
       })
@@ -1064,6 +1170,7 @@ function drawCashFlowChart() {
       ? [{ name: "Expenses", values: expenseTotals }]
       : expenseRows;
   const areas = buildLayers(displayIncome, 1) + buildLayers(displayExpense, -1);
+  const totalBoundaries = `<path class="cashflow-total-boundary" stroke="${colors.income}" d="${line(incomeTotals)}"/><path class="cashflow-total-boundary" stroke="${colors.expense}" d="${line(expenseTotals.map((value) => -value))}"/>`;
   const guides = data.months
     .map(
       (month, index) =>
@@ -1072,12 +1179,12 @@ function drawCashFlowChart() {
     .join("");
   const budgetLines =
     state.cashFlowColorBy === "type"
-      ? `<path class="cashflow-budget income-budget-line" d="${line(Array(count).fill(incomeBudget))}"/><path class="cashflow-budget expense-budget-line" d="${line(Array(count).fill(-expenseBudget))}"/><path class="cashflow-budget net-budget-line" d="${line(Array(count).fill(cashBudget))}"/>`
+      ? `<path class="cashflow-budget" stroke="${colors.income}" d="${line(Array(count).fill(incomeBudget))}"/><path class="cashflow-budget" stroke="${colors.expense}" d="${line(Array(count).fill(-expenseBudget))}"/><path class="cashflow-budget" stroke="${colors.cash}" d="${line(Array(count).fill(cashBudget))}"/>`
       : "";
   const points = cashTotals
     .map(
       (value, index) =>
-        `<g class="cashflow-point"><circle cx="${x(index)}" cy="${y(value)}" r="4"><title>${escapeHtml(monthLabel(data.months[index]))}: income ${money.format(dollars(incomeTotals[index]))}, expenses ${money.format(dollars(expenseTotals[index]))}, cash flow ${money.format(dollars(value))}</title></circle><text x="${x(index)}" y="${Math.max(plot.top + 12, y(value) - 10)}">${compactMoney(value)}</text></g>`,
+        `<g class="cashflow-point"><circle fill="${colors.card}" stroke="${colors.cash}" cx="${x(index)}" cy="${y(value)}" r="4"><title>${escapeHtml(monthLabel(data.months[index]))}: income ${money.format(dollars(incomeTotals[index]))}, expenses ${money.format(dollars(expenseTotals[index]))}, cash flow ${money.format(dollars(value))}</title></circle><text fill="${colors.cash}" stroke="${colors.card}" x="${x(index)}" y="${Math.max(plot.top + 12, y(value) - 10)}">${compactMoney(value)}</text></g>`,
     )
     .join("");
   const legend =
@@ -1090,7 +1197,7 @@ function drawCashFlowChart() {
           )
           .join("") + `<span class="cash-key">Cash flow</span>`;
   $("#cashflow-chart").innerHTML =
-    `<div class="trend-chart-frame"><svg viewBox="0 0 1200 480" role="img" aria-label="Income above zero, expenses below zero, and net cash flow by month">${grid}${guides}${areas}${budgetLines}<path class="cashflow-net-line" d="${line(cashTotals)}"/>${points}</svg></div><div class="cashflow-legend">${legend}</div>`;
+    `<div class="trend-chart-frame"><svg viewBox="0 0 1200 480" role="img" aria-label="Income above zero, expenses below zero, and net cash flow by month">${grid}${guides}${areas}${totalBoundaries}${budgetLines}<path class="cashflow-net-line" stroke="${colors.cash}" d="${line(cashTotals)}"/>${points}</svg></div><div class="cashflow-legend">${legend}</div>`;
   $("#cashflow-budget-note").hidden = state.cashFlowColorBy !== "type";
 }
 async function loadCashFlow() {
@@ -1098,7 +1205,28 @@ async function loadCashFlow() {
     startDate: $("#summary-start-date").value,
     endDate: $("#summary-end-date").value,
   });
-  const result = await api(`/api/v1/cash-flow-trends?${params}`);
+  const chart = $("#cashflow-chart");
+  chart.setAttribute("aria-busy", "true");
+  chart.innerHTML = '<div class="chart-status">Loading cash-flow chart…</div>';
+  let result;
+  try {
+    result = await api(`/api/v1/cash-flow-trends?${params}`);
+  } catch (error) {
+    chart.innerHTML = `<div class="empty chart-error">Cash-flow data could not be loaded. ${escapeHtml(error instanceof Error ? error.message : "Try again.")}</div>`;
+    throw error;
+  } finally {
+    chart.removeAttribute("aria-busy");
+  }
+  if (
+    !result?.data ||
+    !Array.isArray(result.data.months) ||
+    !Array.isArray(result.data.expenseSeries) ||
+    !Array.isArray(result.data.incomeSeries)
+  ) {
+    chart.innerHTML =
+      '<div class="empty chart-error">The cash-flow response was incomplete. Refresh the page and try again.</div>';
+    throw new Error("The cash-flow response was incomplete.");
+  }
   state.cashFlowData = result.data;
   if (!state.cashFlowFiltersInitialized) {
     state.cashFlowSelections.expense = new Set(
@@ -1836,10 +1964,6 @@ document.addEventListener("click", (event) => {
     drawCashFlowChart();
     return;
   }
-  if (target.dataset.themePreset) {
-    applyWebsiteColors(themePresets[target.dataset.themePreset]);
-    return;
-  }
   if (target.id === "reset-website-colors") {
     applyWebsiteColors(defaultWebsiteColors);
     return;
@@ -2404,6 +2528,10 @@ $("#website-colors-form").addEventListener("submit", (event) => {
     notify("Website colors saved to your account.");
   });
 });
+$("#default-theme").addEventListener("change", (event) => {
+  const preset = themePresets[event.target.value];
+  if (preset) applyWebsiteColors(preset);
+});
 $("#account-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const formElement = event.currentTarget;
@@ -2775,8 +2903,10 @@ $("#workspace-select").addEventListener("change", async (event) => {
   state.categories = [];
   state.accounts = [];
   state.netWorthSelectionInitialized = false;
-  applyRoleVisibility();
+  state.cashFlowData = null;
+  state.cashFlowFiltersInitialized = false;
   await run(async () => {
+    await refreshWorkspaceIdentity();
     await loadLookups();
     await showView();
   });

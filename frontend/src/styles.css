@@ -124,6 +124,11 @@ body {
   grid-column: 1 / -1;
   width: 100%;
 }
+.workspace-context {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  line-height: 1.3;
+}
 .mobile-nav-toggle {
   display: none;
 }
@@ -231,7 +236,8 @@ body.nav-collapsed .topbar nav a span,
 body.nav-collapsed #current-username,
 body.nav-collapsed #logout span,
 body.nav-collapsed .user-avatar,
-body.nav-collapsed .workspace-picker {
+body.nav-collapsed .workspace-picker,
+body.nav-collapsed .workspace-context {
   display: none;
 }
 body.nav-collapsed .topbar nav a,
@@ -1265,6 +1271,7 @@ td {
 .cashflow-chart {
   width: 100%;
   min-width: 0;
+  min-height: 360px;
 }
 .cashflow-chart svg {
   display: block;
@@ -1272,13 +1279,17 @@ td {
   min-width: 720px;
 }
 .cashflow-area {
-  opacity: 0.68;
-  stroke: var(--panel);
-  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.cashflow-total-boundary {
+  fill: none;
+  stroke-width: 4;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
 }
 .cashflow-net-line {
   fill: none;
-  stroke: var(--chart-accent);
   stroke-width: 7;
   stroke-linejoin: round;
   stroke-linecap: round;
@@ -1302,18 +1313,21 @@ td {
   stroke-width: 2;
 }
 .cashflow-point circle {
-  fill: var(--panel);
-  stroke: var(--chart-accent);
   stroke-width: 3;
 }
 .cashflow-point text {
-  fill: var(--chart-accent);
   font-size: 12px;
   font-weight: 800;
   text-anchor: middle;
   paint-order: stroke;
-  stroke: var(--panel);
   stroke-width: 4px;
+}
+.chart-status,
+.chart-error {
+  min-height: 330px;
+  display: grid;
+  place-items: center;
+  text-align: center;
 }
 .cashflow-legend {
   display: flex;
@@ -1377,10 +1391,13 @@ td {
   );
 }
 .theme-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  max-width: 420px;
+  gap: 7px;
   margin: 14px 0;
+}
+.theme-presets select {
+  width: 100%;
 }
 .website-colors-form {
   display: grid;
@@ -1715,6 +1732,9 @@ dialog::backdrop {
   }
   body.nav-collapsed .workspace-picker {
     display: block;
+  }
+  body.nav-collapsed .workspace-context {
+    display: inline;
   }
   body.nav-collapsed .topbar nav a,
   body.nav-collapsed .sidebar-heading,

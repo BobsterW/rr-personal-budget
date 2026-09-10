@@ -1,6 +1,18 @@
-# R&R Budget v7.13.1
+# R&R Budget v7.13.3
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.13.3 changes
+
+- Repairs the Cash Flow view's complete loading and rendering path, uses explicit
+  SVG colors and boundary lines, and shows persistent loading, empty, and error
+  states instead of leaving a blank card.
+- Retains ten selectable website themes plus individual custom color controls.
+- Refreshes workspace membership data after every budget switch, hides private
+  editing navigation for Viewers, and routes their sidebar logo to Monthly
+  Activity.
+- Includes the authoritative workspace owner's username in API responses and
+  uses it for the expanded sidebar title and workspace context.
 
 ## V7.13.1 changes
 
