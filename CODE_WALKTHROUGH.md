@@ -1,8 +1,6 @@
-# V7.15 code walkthrough
+# V7.15.1 code walkthrough
 
-Budget snapshot calculation is in `worker/src/budgetHistory.ts`; `0016_budget_snapshots.sql` stores immutable full-budget revisions. The latest revision for an effective date is used until the next effective date. Range budgets use differences of rounded daily cumulative allowances, so adjacent ranges add without penny drift. `repository.ts` supplies these values to summaries, category cards and both trend modes. The Budget editor saves dated snapshots and can load history into an unsaved draft.
-
-Net-worth calculations use daily steps regardless of display resolution. Display points retain range endpoints, today and balance anchors; weekly/monthly/quarterly/yearly controls reduce sampled points without changing calculations.
+Budget history is stored in `budget_snapshots` and normalized `budget_snapshot_items` rows. `worker/src/budgetHistory.ts` selects the latest revision per effective date and calculates exact calendar-day allowances. The repository uses that one calculation for summaries and charts, while the Budget page creates immutable revisions and displays the audit history.
 
 This guide explains how the application works from the browser down to Cloudflare D1. Read it beside the source files. The inline comments identify important implementation boundaries; this guide explains how those boundaries connect.
 

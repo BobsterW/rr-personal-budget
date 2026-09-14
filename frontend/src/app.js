@@ -1426,8 +1426,8 @@ function renderBudgetHistory() {
     : "<p>No saved snapshots yet. Your first save will preserve an initial baseline.</p>";
 }
 function updateBudgetTotals() {
-  $(".budget-master-group").forEach((group) => {
-    const total = $("[data-budget-id]", group).reduce(
+  $$(".budget-master-group").forEach((group) => {
+    const total = $$("[data-budget-id]", group).reduce(
       (sum, input) => sum + cents(input.value || 0),
       0,
     );
@@ -2075,7 +2075,7 @@ async function loadImportSuggestions() {
 }
 
 document.addEventListener("click", (event) => {
-  $(".filter-multiselect[open]").forEach((filter) => {
+  $$(".filter-multiselect[open]").forEach((filter) => {
     if (!filter.contains(event.target)) filter.open = false;
   });
 
@@ -2147,7 +2147,7 @@ document.addEventListener("click", (event) => {
     state.netWorthResolution = levels[next];
     $("#networth-resolution-label").textContent =
       levels[next][0].toUpperCase() + levels[next].slice(1);
-    $("[data-resolution-step]").forEach(
+    $$("[data-resolution-step]").forEach(
       (button) =>
         (button.disabled =
           Number(button.dataset.resolutionStep) < 0 ? next === 0 : next === 4),
@@ -2655,7 +2655,7 @@ document.addEventListener("change", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape")
-    $(".filter-multiselect[open]").forEach((filter) => (filter.open = false));
+    $$(".filter-multiselect[open]").forEach((filter) => (filter.open = false));
   const series = event.target.closest?.("[data-networth-series]");
   if (series && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();

@@ -1095,16 +1095,21 @@ export class BudgetRepository {
         name: "Initial baseline",
         createdAt: "",
         items: categories
-          .filter((c) => c.active === 1)
+          .filter(
+            (c) =>
+              c.active === 1 && (c.kind === "expense" || c.kind === "income"),
+          )
           .map((c) => ({
             categoryId: String(c.id),
             name: String(c.name),
-            kind: String(c.kind),
+            kind: String(c.kind) as "expense" | "income",
             masterCategoryId: c.master_category_id
               ? String(c.master_category_id)
               : null,
             masterName: String(c.master_name ?? "Unassigned"),
-            budgetScope: String(c.budget_scope ?? "personal"),
+            budgetScope: String(c.budget_scope ?? "personal") as
+              | "personal"
+              | "business",
             monthlyBudgetMinor: Number(c.monthly_budget_minor ?? 0),
           })),
       },
@@ -1163,18 +1168,42 @@ export class BudgetRepository {
   async budgetHistory(): Promise<BudgetSnapshot[]> {
     const rows = await this.db
       .prepare(
-        "SELECT * FROM budget_snapshots WHERE user_id=? ORDER BY effective_date,revision",
+        `SELECT s.id,s.effective_date,s.name snapshot_name,s.revision,s.created_at,
+          i.category_id,i.category_name,i.kind,i.master_category_id,
+          i.master_category_name,i.budget_scope,i.monthly_budget_minor
+        FROM budget_snapshots s
+        LEFT JOIN budget_snapshot_items i ON i.snapshot_id=s.id
+        WHERE s.user_id=?
+        ORDER BY s.effective_date,s.revision,i.category_name`,
       )
       .bind(this.userId)
       .all<Record<string, unknown>>();
-    return rows.results.map((row) => ({
-      id: String(row.id),
-      effectiveDate: String(row.effective_date),
-      name: String(row.name),
-      revision: Number(row.revision),
-      createdAt: String(row.created_at),
-      items: JSON.parse(String(row.items_json)) as BudgetItem[],
-    }));
+    const snapshots = new Map<string, BudgetSnapshot>();
+    for (const row of rows.results) {
+      const id = String(row.id);
+      if (!snapshots.has(id))
+        snapshots.set(id, {
+          id,
+          effectiveDate: String(row.effective_date),
+          name: String(row.snapshot_name),
+          revision: Number(row.revision),
+          createdAt: String(row.created_at),
+          items: [],
+        });
+      if (row.category_id)
+        snapshots.get(id)!.items.push({
+          categoryId: String(row.category_id),
+          name: String(row.category_name),
+          kind: String(row.kind) as "expense" | "income",
+          masterCategoryId: row.master_category_id
+            ? String(row.master_category_id)
+            : null,
+          masterName: String(row.master_category_name),
+          budgetScope: String(row.budget_scope) as "personal" | "business",
+          monthlyBudgetMinor: Number(row.monthly_budget_minor),
+        });
+    }
+    return [...snapshots.values()];
   }
 
   async saveBudgetSnapshot(
@@ -1185,7 +1214,9 @@ export class BudgetRepository {
   ) {
     const history = await this.budgetHistory();
     const categories = await this.listBudgetCategories();
-    const active = categories.filter((c) => c.active === 1);
+    const active = categories.filter(
+      (c) => c.active === 1 && (c.kind === "expense" || c.kind === "income"),
+    );
     const ids = new Set(active.map((c) => String(c.id)));
     if (
       new Set(items.map((i) => i.categoryId)).size !== items.length ||
@@ -1206,12 +1237,14 @@ export class BudgetRepository {
       active.map((c) => ({
         categoryId: String(c.id),
         name: String(c.name),
-        kind: String(c.kind),
+        kind: String(c.kind) as "expense" | "income",
         masterCategoryId: c.master_category_id
           ? String(c.master_category_id)
           : null,
         masterName: String(c.master_name ?? "Unassigned"),
-        budgetScope: String(c.budget_scope ?? "personal"),
+        budgetScope: String(c.budget_scope ?? "personal") as
+          | "personal"
+          | "business",
         monthlyBudgetMinor: Number(
           useBase
             ? (amounts.get(String(c.id)) ?? c.monthly_budget_minor ?? 0)
@@ -1220,37 +1253,56 @@ export class BudgetRepository {
       }));
     const now = new Date().toISOString(),
       id = crypto.randomUUID();
-    const statements = [];
-    if (!history.length)
+    const statements: D1PreparedStatement[] = [];
+    const appendSnapshot = (
+      snapshotId: string,
+      date: string,
+      snapshotName: string,
+      revision: number,
+      captured: BudgetItem[],
+    ) => {
       statements.push(
         this.db
           .prepare(
-            "INSERT INTO budget_snapshots(id,user_id,effective_date,name,revision,items_json,created_at) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO budget_snapshots(id,user_id,effective_date,name,revision,created_at) VALUES (?,?,?,?,?,?)",
           )
-          .bind(
-            crypto.randomUUID(),
-            this.userId,
-            "0001-01-01",
-            "Initial baseline (historical amounts unknown)",
-            1,
-            JSON.stringify(capture(false)),
-            now,
-          ),
+          .bind(snapshotId, this.userId, date, snapshotName, revision, now),
       );
-    statements.push(
-      this.db
-        .prepare(
-          "INSERT INTO budget_snapshots(id,user_id,effective_date,name,revision,items_json,created_at) VALUES (?,?,?,?,?,?,?)",
-        )
-        .bind(
-          id,
-          this.userId,
-          effectiveDate,
-          name,
-          (previous?.revision ?? 0) + 1,
-          JSON.stringify(capture(true)),
-          now,
-        ),
+      for (const item of captured)
+        statements.push(
+          this.db
+            .prepare(
+              `INSERT INTO budget_snapshot_items(
+                snapshot_id,category_id,category_name,kind,master_category_id,
+                master_category_name,budget_scope,monthly_budget_minor
+              ) VALUES (?,?,?,?,?,?,?,?)`,
+            )
+            .bind(
+              snapshotId,
+              item.categoryId,
+              item.name,
+              item.kind,
+              item.masterCategoryId,
+              item.masterName,
+              item.budgetScope,
+              item.monthlyBudgetMinor,
+            ),
+        );
+    };
+    if (!history.length)
+      appendSnapshot(
+        crypto.randomUUID(),
+        "0001-01-01",
+        "Initial budget (earlier history unknown)",
+        1,
+        capture(false),
+      );
+    appendSnapshot(
+      id,
+      effectiveDate,
+      name,
+      (previous?.revision ?? 0) + 1,
+      capture(true),
     );
     // The snapshot is authoritative; the category value remains a legacy fallback.
     await this.db.batch(statements);

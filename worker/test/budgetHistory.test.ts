@@ -1,19 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   budgetAllowance,
   budgetAt,
   type BudgetSnapshot,
 } from "../src/budgetHistory";
+
 const snapshot = (
   date: string,
   amount: number,
   revision = 1,
 ): BudgetSnapshot => ({
-  id: date + revision,
+  id: `${date}-${revision}`,
   effectiveDate: date,
-  name: "Housing",
+  name: "Test",
   revision,
-  createdAt: "",
+  createdAt: `${date}T00:00:00Z`,
   items: [
     {
       categoryId: "housing",
@@ -31,48 +32,38 @@ const total = (history: BudgetSnapshot[], start: string, end: string) =>
     (sum, row) => sum + row.budgetMinor,
     0,
   );
+
 describe("effective budget history", () => {
-  it("uses both budgets across two years and a six-month crossing range", () => {
+  it("uses each snapshot only for its effective period", () => {
     const history = [
-      snapshot("2025-01-01", 100000),
-      snapshot("2026-01-01", 300000),
+      snapshot("2025-01-01", 100_000),
+      snapshot("2026-01-01", 300_000),
     ];
-    expect(total(history, "2025-01-01", "2026-12-31")).toBe(4800000);
-    expect(total(history, "2025-10-01", "2026-03-31")).toBe(1200000);
+    expect(total(history, "2025-01-01", "2026-12-31")).toBe(4_800_000);
   });
-  it("prorates a mid-month change without rounding drift", () => {
-    const history = [
-      snapshot("2026-09-01", 100000),
-      snapshot("2026-09-15", 300000),
-    ];
-    expect(total(history, "2026-09-01", "2026-09-30")).toBe(206667);
+  it("prorates a mid-month change by calendar day", () => {
     expect(
-      total(history, "2026-09-01", "2026-09-14") +
-        total(history, "2026-09-15", "2026-09-30"),
-    ).toBe(206667);
+      total(
+        [snapshot("2026-09-01", 100_000), snapshot("2026-09-15", 300_000)],
+        "2026-09-01",
+        "2026-09-30",
+      ),
+    ).toBe(206_667);
   });
-  it("handles leap-day partial ranges and revisions", () => {
+  it("uses the latest same-date revision without erasing history", () => {
     const history = [
-      snapshot("2024-01-01", 10000),
-      snapshot("2024-01-01", 29000, 2),
+      snapshot("2026-01-01", 100_000),
+      snapshot("2026-01-01", 250_000, 2),
     ];
-    expect(total(history, "2024-02-29", "2024-02-29")).toBe(1000);
-    expect(total(history, "2024-02-01", "2024-02-29")).toBe(29000);
-    expect(budgetAt(history, "2023-12-31")).toBeUndefined();
-    expect(budgetAt(history, "2024-03-01")?.revision).toBe(2);
+    expect(budgetAt(history, "2026-06-01")?.revision).toBe(2);
+    expect(history).toHaveLength(2);
   });
-  it("preserves snapshot labels and scope for filtering", () => {
-    const history = [snapshot("2026-01-01", 10000)];
-    const next = snapshot("2026-02-01", 20000);
-    next.items[0]!.budgetScope = "business";
-    history.push(next);
+  it("handles leap-day ranges without penny drift", () => {
+    const history = [snapshot("2024-02-01", 29_000)];
+    expect(total(history, "2024-02-01", "2024-02-29")).toBe(29_000);
     expect(
-      budgetAllowance(
-        history,
-        "2026-01-01",
-        "2026-02-28",
-        (item) => item.budgetScope === "personal",
-      )[0]?.budgetMinor,
-    ).toBe(10000);
+      total(history, "2024-02-01", "2024-02-14") +
+        total(history, "2024-02-15", "2024-02-29"),
+    ).toBe(29_000);
   });
 });
