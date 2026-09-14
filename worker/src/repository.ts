@@ -5,6 +5,12 @@
  * second database-level barrier against cross-user relationships.
  */
 import type { TransactionInput } from "./types";
+import {
+  budgetAllowance,
+  budgetAt,
+  type BudgetSnapshot,
+  type BudgetItem,
+} from "./budgetHistory";
 
 // Stored amounts stay positive. These static SQL expressions apply the
 // direction when calculating spending and income; no user input enters them.
@@ -995,7 +1001,7 @@ export class BudgetRepository {
     startDate: string,
     endDate: string,
     type: "expense" | "income",
-    monthCount: number,
+    _monthCount: number,
     scope: BudgetScope,
   ) {
     const effect = type === "expense" ? EXPENSE_EFFECT_SQL : INCOME_EFFECT_SQL;
@@ -1003,10 +1009,10 @@ export class BudgetRepository {
       type === "expense"
         ? "t.transaction_type IN ('expense','refund')"
         : "t.transaction_type='income'";
-    const [categories, accounts, masterCategories, budget] = await Promise.all([
+    const [categories, accounts, masterCategories] = await Promise.all([
       this.db
         .prepare(
-          `SELECT c.id,c.name,c.master_category_id,c.monthly_budget_minor,COALESCE(SUM(${effect}),0) amount_minor,COUNT(t.id) transaction_count,COALESCE(SUM(CASE WHEN t.transaction_type='refund' OR t.transaction_direction=${type === "expense" ? "'credit'" : "'debit'"} THEN t.amount_minor ELSE 0 END),0) reversal_minor FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id LEFT JOIN transactions t ON t.category_id=c.id AND t.user_id=c.user_id AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} WHERE c.user_id=? AND c.active=1 AND c.kind=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY c.id,c.name,c.master_category_id,c.monthly_budget_minor ORDER BY amount_minor DESC,c.name`,
+          `SELECT c.id,c.name,c.master_category_id,mc.name master_name,COALESCE(mc.budget_scope,'personal') budget_scope,c.monthly_budget_minor,COALESCE(SUM(${effect}),0) amount_minor,COUNT(t.id) transaction_count,COALESCE(SUM(CASE WHEN t.transaction_type='refund' OR t.transaction_direction=${type === "expense" ? "'credit'" : "'debit'"} THEN t.amount_minor ELSE 0 END),0) reversal_minor FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id LEFT JOIN transactions t ON t.category_id=c.id AND t.user_id=c.user_id AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql} WHERE c.user_id=? AND c.active=1 AND c.kind=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY c.id,c.name,c.master_category_id,c.monthly_budget_minor ORDER BY amount_minor DESC,c.name`,
         )
         .bind(
           startDate,
@@ -1018,7 +1024,7 @@ export class BudgetRepository {
         .all(),
       this.db
         .prepare(
-          `SELECT a.id,a.name,COALESCE(c.master_category_id,'unassigned') master_category_id,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql}${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY a.id,a.name,c.master_category_id ORDER BY amount_minor DESC`,
+          `SELECT a.id,a.name,c.id category_id,COALESCE(c.master_category_id,'unassigned') master_category_id,SUM(${effect}) amount_minor,COUNT(*) transaction_count FROM transactions t JOIN accounts a ON a.id=t.account_id AND a.user_id=t.user_id JOIN categories c ON c.id=t.category_id AND c.user_id=t.user_id LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE t.user_id=? AND t.transaction_date BETWEEN ? AND ? AND ${transactionTypeSql}${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} GROUP BY a.id,a.name,c.id,c.master_category_id ORDER BY amount_minor DESC`,
         )
         .bind(
           this.userId,
@@ -1038,19 +1044,71 @@ export class BudgetRepository {
           ...(scope === "both" ? [] : [scope]),
         )
         .all(),
-      this.db
-        .prepare(
-          `SELECT COALESCE(SUM(c.monthly_budget_minor),0) total FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE c.user_id=? AND c.active=1 AND c.kind=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")}`,
-        )
-        .bind(this.userId, type, ...(scope === "both" ? [] : [scope]))
-        .first<{ total: number }>(),
     ]);
+    const allowances = budgetAllowance(
+      await this.historyOrBaseline(),
+      startDate,
+      endDate,
+      (item) =>
+        item.kind === type && (scope === "both" || item.budgetScope === scope),
+    );
+    const rows: Record<string, unknown>[] = categories.results.map((row) => ({
+      ...row,
+      budget_minor: allowances
+        .filter((a) => a.categoryId === row.id)
+        .reduce((sum, a) => sum + a.budgetMinor, 0),
+    }));
+    for (const item of allowances)
+      if (!rows.some((row) => row.id === item.categoryId))
+        rows.push({
+          id: item.categoryId,
+          name: item.name,
+          master_category_id: item.masterCategoryId,
+          master_name: item.masterName,
+          budget_scope: item.budgetScope,
+          amount_minor: 0,
+          transaction_count: 0,
+          budget_minor: allowances
+            .filter((a) => a.categoryId === item.categoryId)
+            .reduce((sum, a) => sum + a.budgetMinor, 0),
+        });
     return {
-      byCategory: categories.results,
+      byCategory: rows,
       byAccount: accounts.results,
       byMasterCategory: masterCategories.results,
-      totalBudgetMinor: Number(budget?.total ?? 0) * monthCount,
+      totalBudgetMinor: allowances.reduce(
+        (sum, item) => sum + item.budgetMinor,
+        0,
+      ),
     };
+  }
+
+  async historyOrBaseline(): Promise<BudgetSnapshot[]> {
+    const history = await this.budgetHistory();
+    if (history.length) return history;
+    const categories = await this.listBudgetCategories();
+    return [
+      {
+        id: "baseline",
+        effectiveDate: "0001-01-01",
+        revision: 1,
+        name: "Initial baseline",
+        createdAt: "",
+        items: categories
+          .filter((c) => c.active === 1)
+          .map((c) => ({
+            categoryId: String(c.id),
+            name: String(c.name),
+            kind: String(c.kind),
+            masterCategoryId: c.master_category_id
+              ? String(c.master_category_id)
+              : null,
+            masterName: String(c.master_name ?? "Unassigned"),
+            budgetScope: String(c.budget_scope ?? "personal"),
+            monthlyBudgetMinor: Number(c.monthly_budget_minor ?? 0),
+          })),
+      },
+    ];
   }
 
   async rangeSummary(
@@ -1102,27 +1160,108 @@ export class BudgetRepository {
     };
   }
 
-  async updateBudgets(
+  async budgetHistory(): Promise<BudgetSnapshot[]> {
+    const rows = await this.db
+      .prepare(
+        "SELECT * FROM budget_snapshots WHERE user_id=? ORDER BY effective_date,revision",
+      )
+      .bind(this.userId)
+      .all<Record<string, unknown>>();
+    return rows.results.map((row) => ({
+      id: String(row.id),
+      effectiveDate: String(row.effective_date),
+      name: String(row.name),
+      revision: Number(row.revision),
+      createdAt: String(row.created_at),
+      items: JSON.parse(String(row.items_json)) as BudgetItem[],
+    }));
+  }
+
+  async saveBudgetSnapshot(
     items: Array<{ categoryId: string; monthlyBudgetMinor: number }>,
+    effectiveDate: string,
+    name: string,
+    correction: boolean,
   ) {
-    const now = new Date().toISOString();
-    const results = await this.db.batch(
-      items.map((item) =>
+    const history = await this.budgetHistory();
+    const categories = await this.listBudgetCategories();
+    const active = categories.filter((c) => c.active === 1);
+    const ids = new Set(active.map((c) => String(c.id)));
+    if (
+      new Set(items.map((i) => i.categoryId)).size !== items.length ||
+      items.some((i) => !ids.has(i.categoryId))
+    )
+      return { error: "categories" };
+    const previous = history
+      .filter((s) => s.effectiveDate === effectiveDate)
+      .at(-1);
+    if (previous && !correction) return { error: "conflict" };
+    const base = budgetAt(history, effectiveDate);
+    const amounts = new Map(
+      (base?.items ?? []).map((i) => [i.categoryId, i.monthlyBudgetMinor]),
+    );
+    for (const item of items)
+      amounts.set(item.categoryId, item.monthlyBudgetMinor);
+    const capture = (useBase: boolean): BudgetItem[] =>
+      active.map((c) => ({
+        categoryId: String(c.id),
+        name: String(c.name),
+        kind: String(c.kind),
+        masterCategoryId: c.master_category_id
+          ? String(c.master_category_id)
+          : null,
+        masterName: String(c.master_name ?? "Unassigned"),
+        budgetScope: String(c.budget_scope ?? "personal"),
+        monthlyBudgetMinor: Number(
+          useBase
+            ? (amounts.get(String(c.id)) ?? c.monthly_budget_minor ?? 0)
+            : (c.monthly_budget_minor ?? 0),
+        ),
+      }));
+    const now = new Date().toISOString(),
+      id = crypto.randomUUID();
+    const statements = [];
+    if (!history.length)
+      statements.push(
         this.db
           .prepare(
-            "UPDATE categories SET monthly_budget_minor=?,updated_at=? WHERE id=? AND user_id=? AND active=1",
+            "INSERT INTO budget_snapshots(id,user_id,effective_date,name,revision,items_json,created_at) VALUES (?,?,?,?,?,?,?)",
           )
-          .bind(item.monthlyBudgetMinor, now, item.categoryId, this.userId),
-      ),
+          .bind(
+            crypto.randomUUID(),
+            this.userId,
+            "0001-01-01",
+            "Initial baseline (historical amounts unknown)",
+            1,
+            JSON.stringify(capture(false)),
+            now,
+          ),
+      );
+    statements.push(
+      this.db
+        .prepare(
+          "INSERT INTO budget_snapshots(id,user_id,effective_date,name,revision,items_json,created_at) VALUES (?,?,?,?,?,?,?)",
+        )
+        .bind(
+          id,
+          this.userId,
+          effectiveDate,
+          name,
+          (previous?.revision ?? 0) + 1,
+          JSON.stringify(capture(true)),
+          now,
+        ),
     );
-    return results.reduce((sum, result) => sum + (result.meta.changes ?? 0), 0);
+    // The snapshot is authoritative; the category value remains a legacy fallback.
+    await this.db.batch(statements);
+    return { id, updated: items.length };
   }
 
   async listBudgetCategories(scope: BudgetScope = "both") {
     return (
       await this.db
         .prepare(
-          `SELECT c.*,COALESCE(mc.budget_scope,'personal') budget_scope FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE c.user_id=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} ORDER BY c.active DESC,c.name`,
+          `SELECT c.*,mc.name master_name,COALESCE(mc.budget_scope,'personal') budget_scope FROM categories c LEFT JOIN master_categories mc ON mc.id=c.master_category_id AND mc.user_id=c.user_id WHERE c.user_id=?${scoped(scope, "COALESCE(mc.budget_scope,'personal')")} ORDER BY c.active DESC,c.name`,
         )
         .bind(...(scope === "both" ? [this.userId] : [this.userId, scope]))
         .all()
@@ -1168,28 +1307,7 @@ export class BudgetRepository {
       )
       .bind(...bindings)
       .all<{ month: string; actual_minor: number }>();
-    const budgetClauses = ["user_id=?", "active=1", "kind=?"],
-      budgetBindings: unknown[] = [this.userId, type];
-    if (categoryId) {
-      budgetClauses.push("id=?");
-      budgetBindings.push(categoryId);
-    }
-    if (masterCategoryId) {
-      budgetClauses.push("master_category_id=?");
-      budgetBindings.push(masterCategoryId);
-    }
-    if (scope !== "both") {
-      budgetClauses.push(
-        "COALESCE((SELECT budget_scope FROM master_categories WHERE id=categories.master_category_id AND user_id=categories.user_id),'personal')=?",
-      );
-      budgetBindings.push(scope);
-    }
-    const budget = await this.db
-      .prepare(
-        `SELECT COALESCE(SUM(monthly_budget_minor),0) budget_minor FROM categories WHERE ${budgetClauses.join(" AND ")}`,
-      )
-      .bind(...budgetBindings)
-      .first<{ budget_minor: number }>();
+    const history = await this.historyOrBaseline();
     const actualByMonth = new Map(
       actualRows.results.map((row) => [row.month, row.actual_minor]),
     );
@@ -1207,7 +1325,23 @@ export class BudgetRepository {
     return months.map((month) => ({
       month,
       actualMinor: actualByMonth.get(month) ?? 0,
-      budgetMinor: budget?.budget_minor ?? 0,
+      budgetMinor: budgetAllowance(
+        history,
+        startDate > month + "-01" ? startDate : month + "-01",
+        endDate.slice(0, 7) === month
+          ? endDate
+          : new Date(
+              Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)), 0),
+            )
+              .toISOString()
+              .slice(0, 10),
+        (item) =>
+          item.kind === type &&
+          (!categoryId || item.categoryId === categoryId) &&
+          (!masterCategoryId ||
+            (item.masterCategoryId ?? "unassigned") === masterCategoryId) &&
+          (scope === "both" || item.budgetScope === scope),
+      ).reduce((sum, item) => sum + item.budgetMinor, 0),
       averageMinor,
     }));
   }
@@ -1224,6 +1358,7 @@ export class BudgetRepository {
       months.push(cursor.toISOString().slice(0, 7));
       cursor.setUTCMonth(cursor.getUTCMonth() + 1);
     }
+    const history = await this.historyOrBaseline();
     const buildSeries = async (type: "expense" | "income") => {
       const transactionClause =
         type === "expense"
@@ -1282,7 +1417,40 @@ export class BudgetRepository {
           Number(row.actual_minor),
         ]),
       );
+      for (const snapshot of history)
+        for (const item of snapshot.items)
+          if (
+            item.kind === type &&
+            (scope === "both" || item.budgetScope === scope) &&
+            !identities.has(item.masterCategoryId ?? "unassigned")
+          )
+            identities.set(item.masterCategoryId ?? "unassigned", {
+              id: item.masterCategoryId ?? "unassigned",
+              name: item.masterName,
+              budgetMinor: 0,
+            });
       return [...identities.values()].map((identity) => ({
+        budgetValues: months.map((month) =>
+          budgetAllowance(
+            history,
+            startDate > month + "-01" ? startDate : month + "-01",
+            endDate.slice(0, 7) === month
+              ? endDate
+              : new Date(
+                  Date.UTC(
+                    Number(month.slice(0, 4)),
+                    Number(month.slice(5)),
+                    0,
+                  ),
+                )
+                  .toISOString()
+                  .slice(0, 10),
+            (item) =>
+              item.kind === type &&
+              (item.masterCategoryId ?? "unassigned") === identity.id &&
+              (scope === "both" || item.budgetScope === scope),
+          ).reduce((sum, item) => sum + item.budgetMinor, 0),
+        ),
         ...identity,
         values: months.map(
           (month) => lookup.get(`${identity.id}:${month}`) ?? 0,

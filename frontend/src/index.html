@@ -8,7 +8,7 @@
       content="Private transaction, monthly spending, and net-worth tracker."
     />
     <title>R&R Budget</title>
-    <link rel="stylesheet" href="styles.css?v=7.14" />
+    <link rel="stylesheet" href="styles.css?v=7.15" />
   </head>
   <body>
     <!-- Authentication is the only visible section until /auth/me confirms a session. -->
@@ -216,7 +216,7 @@
             data-transaction-filter="scope"
             hidden
           >
-            <summary>Personal / business <strong>All</strong></summary>
+            <summary>Personal / Business <strong>All</strong></summary>
             <div class="filter-menu" id="transaction-scope-filter"></div>
           </details>
           <label
@@ -505,6 +505,24 @@
           </div>
         </div>
         <form id="budget-form">
+          <div class="panel snapshot-controls">
+            <label
+              >Effective from<input
+                type="date"
+                id="budget-effective-date"
+                required /></label
+            ><label
+              >Snapshot name (optional)<input
+                id="budget-snapshot-name"
+                maxlength="100"
+                placeholder="Example: Bought a house"
+            /></label>
+            <p>
+              Each saved budget applies until the next snapshot. Partial months
+              are prorated by calendar days. Changing the effective date loads
+              the budget for that date.
+            </p>
+          </div>
           <div class="split">
             <section class="panel">
               <h2>Expense budget</h2>
@@ -529,6 +547,15 @@
             ><button>Save budget</button>
           </div>
         </form>
+        <details class="panel budget-history">
+          <summary>Budget history</summary>
+          <p>
+            The initial baseline preserves your previous budget. Older
+            overwritten amounts are unknown; add backdated snapshots to correct
+            them. Earlier revisions remain available below.
+          </p>
+          <div id="budget-history-list"></div>
+        </details>
       </section>
       <section id="net-worth" class="view" hidden>
         <div class="hero">
@@ -598,6 +625,25 @@
             <div id="networth-account-toggles" class="account-toggles"></div>
           </div>
           <div id="projection-chart" class="projection-chart"></div>
+          <div class="resolution-control" aria-label="Graph resolution">
+            <button
+              type="button"
+              class="secondary"
+              data-resolution-step="-1"
+              aria-label="Less detail"
+            >
+              −</button
+            ><span id="networth-resolution-label" aria-live="polite"
+              >Monthly</span
+            ><button
+              type="button"
+              class="secondary"
+              data-resolution-step="1"
+              aria-label="More detail"
+            >
+              +
+            </button>
+          </div>
           <div
             id="networth-account-detail"
             class="account-chart-detail"
@@ -1210,6 +1256,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.14"></script>
+    <script type="module" src="app.js?v=7.15"></script>
   </body>
 </html>

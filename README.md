@@ -1,6 +1,15 @@
-# R&R Budget v7.14
+# R&R Budget v7.15
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.15 changes
+
+- Effective-dated budget snapshots and revision history; monthly activity budgets use calendar-day proration across snapshots.
+- The initial baseline preserves existing amounts, but cannot reconstruct historical budgets that were never saved. Add backdated snapshots to correct those periods.
+- Grouped master-category budgets and activity cards, with Personal / Business labels only when separation is enabled.
+- Transaction dropdowns close on outside click or Escape; centered expanded-sidebar sign-out label.
+- Net-worth resolution controls: yearly, quarterly, monthly, weekly, daily. Daily calculations preserve identical final balances across resolutions.
+- Migration 0016 creates snapshot storage. The existing GitHub deployment workflow applies it before deploying the API and frontend.
 
 ## V7.14 changes
 

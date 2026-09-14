@@ -31,6 +31,27 @@ const accounts: TimelineAccount[] = [
 ];
 
 describe("net-worth timeline", () => {
+  it("changes display detail without changing balances or scheduled payments", () => {
+    const resolutions = ["yearly", "quarterly", "monthly", "weekly", "daily"] as const;
+    const series = resolutions.map((resolution) => buildNetWorthTimeline(
+      [{ ...accounts[0]!, annualGrowthBps: 400 }],
+      [{ accountId: "cash", date: "2026-01-01", balanceMinor: 5_000_000 }],
+      [], assumptions, "2026-01-01", "2027-12-31", "2026-01-01",
+      [{ id: "insurance", description: "Insurance", ruleType: "expense", amountMinor: 800_000,
+        frequency: "yearly", startDate: "2026-06-15", endDate: null, fromAccountId: "cash", toAccountId: null }],
+      resolution,
+    ));
+    for (const points of series) {
+      expect(points.at(-1)).toEqual(series[4]!.at(-1));
+      expect(points[0]!.date).toBe("2026-01-01");
+    }
+    expect(series[0]!.length).toBeLessThan(series[2]!.length);
+    expect(series[2]!.length).toBeLessThan(series[4]!.length);
+    const daily = series[4]!;
+    const before = daily.find(p => p.date === "2026-06-14")!.netWorthMinor;
+    const after = daily.find(p => p.date === "2026-06-15")!.netWorthMinor;
+    expect(before - after).toBeGreaterThan(799_000);
+  });
   it("reconstructs history on both sides of a balance snapshot", () => {
     const snapshots = [
       { accountId: "cash", date: "2026-06-30", balanceMinor: 100_000 },

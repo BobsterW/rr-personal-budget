@@ -127,6 +127,97 @@ body {
 .user-menu button {
   margin-left: auto;
 }
+body:not(.nav-collapsed) #logout {
+  position: relative;
+  min-width: 112px;
+  padding-inline: 24px;
+  text-align: center;
+}
+body:not(.nav-collapsed) #logout i {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.snapshot-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.snapshot-controls p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+}
+.budget-master-group {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+}
+.budget-group-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.budget-group-heading h3 {
+  margin: 0;
+}
+.budget-group-heading > strong {
+  margin-left: auto;
+}
+.budget-history {
+  margin-top: 20px;
+}
+.budget-history summary {
+  cursor: pointer;
+  font-weight: 750;
+}
+.budget-history-entry {
+  border-top: 1px solid var(--line);
+  padding: 16px 0;
+}
+.budget-history-entry summary span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 6px;
+}
+.history-items > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.history-items strong {
+  margin-left: auto;
+}
+.resolution-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+.resolution-control button {
+  padding: 8px 14px;
+}
+.activity-master-group {
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+}
+.activity-master-group h3 {
+  margin: 0 0 8px;
+}
+.activity-master-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
 .workspace-picker {
   grid-column: 1 / -1;
   width: 100%;

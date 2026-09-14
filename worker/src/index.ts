@@ -1,3 +1,4 @@
+import { budgetAt } from "./budgetHistory";
 /*
  * CLOUDFLARE WORKER HTTP CONTROLLER
  * Applies origin/security policy, exposes authentication endpoints, requires a
@@ -1384,13 +1385,30 @@ async function route(request: Request, env: Env): Promise<Response> {
       ),
     });
   }
+  if (path === "/api/v1/budget-history" && method === "GET")
+    return json({ data: await repo.budgetHistory() });
   if (path === "/api/v1/budgets" && method === "GET") {
     const categories = (
       await repo.listBudgetCategories(
         budgetScope(url.searchParams.get("scope")),
       )
     ).map((row) => toCamel(row));
-    return json({ data: categories });
+    const date = requireDate(
+      url.searchParams.get("effectiveDate") ??
+        new Date().toLocaleDateString("en-CA", {
+          timeZone: "America/Edmonton",
+        }),
+      "effectiveDate",
+    );
+    const snapshot = budgetAt(await repo.budgetHistory(), date);
+    return json({
+      data: categories.map((c) => ({
+        ...c,
+        monthlyBudgetMinor:
+          snapshot?.items.find((i) => i.categoryId === c.id)
+            ?.monthlyBudgetMinor ?? c.monthlyBudgetMinor,
+      })),
+    });
   }
   if (path === "/api/v1/budgets" && method === "PUT") {
     const body = assertObject(await readJson(request));
@@ -1417,14 +1435,27 @@ async function route(request: Request, env: Env): Promise<Response> {
         monthlyBudgetMinor: Number(item.monthlyBudgetMinor),
       };
     });
-    const updated = await repo.updateBudgets(items);
-    if (updated !== items.length)
+    const effectiveDate = requireDate(
+      typeof body.effectiveDate === "string" ? body.effectiveDate : null,
+      "effectiveDate",
+    );
+    const result = await repo.saveBudgetSnapshot(
+      items,
+      effectiveDate,
+      typeof body.name === "string" ? body.name.slice(0, 100) : "",
+      body.correction === true,
+    );
+    if (result.error)
       throw new ApiError(
         409,
-        "BUDGET_UPDATE_INCOMPLETE",
-        "One or more categories no longer exist. Refresh the budget and try again.",
+        result.error === "conflict"
+          ? "SNAPSHOT_EXISTS"
+          : "BUDGET_UPDATE_INCOMPLETE",
+        result.error === "conflict"
+          ? "A snapshot already starts on this date. Confirm a correction to retain both revisions."
+          : "One or more categories no longer exist. Refresh and try again.",
       );
-    return json({ data: { updated } });
+    return json({ data: result });
   }
   if (path === "/api/v1/spending-trends" && method === "GET") {
     const startDate = requireDate(
@@ -1716,6 +1747,11 @@ async function route(request: Request, env: Env): Promise<Response> {
           endDate,
           today,
           projectionRules,
+          ["yearly", "quarterly", "monthly", "weekly", "daily"].includes(
+            url.searchParams.get("resolution") ?? "",
+          )
+            ? (url.searchParams.get("resolution") as "monthly")
+            : "monthly",
         ),
       },
     });

@@ -13,6 +13,8 @@ import { inferDateOrder, normalizeImportDate } from "./date.js";
 const API = window.APP_CONFIG.API_BASE_URL.replace(/\/$/, "");
 // Short-lived browser cache. A refresh intentionally reloads it from the API.
 const state = {
+  budgetHistory: [],
+  netWorthResolution: "monthly",
   categories: [],
   accounts: [],
   vendors: [],
@@ -797,7 +799,9 @@ function renderCategoryRanking() {
   const rows = data.byCategory
     .filter(
       (row) =>
-        selected === null || masterKey(row.master_category_id) === selected,
+        (selected === null || masterKey(row.master_category_id) === selected) &&
+        (state.activityTrendSelection?.kind !== "category" ||
+          row.category_id === state.activityTrendSelection.id),
     )
     .sort((a, b) => b.amount_minor - a.amount_minor);
   const master = data.byMasterCategory.find(
@@ -813,8 +817,7 @@ function renderCategoryRanking() {
   $("#category-ranked-bars").innerHTML = rows.length
     ? rows
         .map((row, index) => {
-          const periodBudget =
-            Number(row.monthly_budget_minor ?? 0) * summary.monthCount;
+          const periodBudget = Number(row.budget_minor ?? 0);
           const remaining = periodBudget - row.amount_minor;
           const count = Number(row.transaction_count ?? 0);
           const average = count ? row.amount_minor / count : 0;
@@ -831,6 +834,39 @@ function renderCategoryRanking() {
         })
         .join("")
     : '<div class="empty">No categories belong to this master category in the selected range.</div>';
+  if (rows.length) {
+    const articles = [...$("#category-ranked-bars").children];
+    const groups = new Map();
+    rows.forEach((row, index) => {
+      const scope = row.budget_scope || "personal";
+      const key = JSON.stringify([
+        state.separatePersonalBusiness ? scope : "",
+        row.master_category_id,
+      ]);
+      if (!groups.has(key))
+        groups.set(key, {
+          name:
+            row.master_name ||
+            state.masterCategories.find((m) => m.id === row.master_category_id)
+              ?.name ||
+            "Unassigned",
+          scope,
+          actual: 0,
+          budget: 0,
+          html: [],
+        });
+      const group = groups.get(key);
+      group.actual += Number(row.amount_minor);
+      group.budget += Number(row.budget_minor ?? 0);
+      group.html.push(articles[index].outerHTML);
+    });
+    $("#category-ranked-bars").innerHTML = [...groups.values()]
+      .map(
+        (group) =>
+          `<section class="activity-master-group"><h3>${escapeHtml(group.name)}${state.separatePersonalBusiness ? ` <small>· ${group.scope === "business" ? "Business" : "Personal"}</small>` : ""}</h3><div class="activity-master-totals"><span>Actual ${money.format(dollars(group.actual))}</span><span>Budget ${money.format(dollars(group.budget))}</span><strong>${group.budget >= group.actual ? "Left" : "Over"} ${money.format(dollars(Math.abs(group.budget - group.actual)))}</strong></div>${group.html.join("")}</section>`,
+      )
+      .join("");
+  }
 }
 function renderSpendingBreakdown() {
   const summary = state.summary,
@@ -1127,23 +1163,29 @@ function drawCashFlowChart() {
     cashTotals = incomeTotals.map(
       (value, index) => value - expenseTotals[index],
     ),
-    incomeBudget = incomeRows.reduce(
-      (sum, row) => sum + Number(row.budgetMinor ?? 0),
-      0,
+    incomeBudget = data.months.map((_, i) =>
+      incomeRows.reduce(
+        (sum, row) =>
+          sum + Number(row.budgetValues?.[i] ?? row.budgetMinor ?? 0),
+        0,
+      ),
     ),
-    expenseBudget = expenseRows.reduce(
-      (sum, row) => sum + Number(row.budgetMinor ?? 0),
-      0,
+    expenseBudget = data.months.map((_, i) =>
+      expenseRows.reduce(
+        (sum, row) =>
+          sum + Number(row.budgetValues?.[i] ?? row.budgetMinor ?? 0),
+        0,
+      ),
     ),
-    cashBudget = incomeBudget - expenseBudget,
+    cashBudget = incomeBudget.map((amount, i) => amount - expenseBudget[i]),
     bound = Math.max(
       1,
       ...incomeTotals,
       ...expenseTotals,
       ...cashTotals.map(Math.abs),
-      incomeBudget,
-      expenseBudget,
-      Math.abs(cashBudget),
+      ...incomeBudget,
+      ...expenseBudget,
+      ...cashBudget.map(Math.abs),
     ),
     plot = { left: 86, right: 1172, top: 34, bottom: 404 },
     x = (index) =>
@@ -1236,7 +1278,7 @@ function drawCashFlowChart() {
     .join("");
   const budgetLines =
     state.cashFlowColorBy === "type"
-      ? `<path class="cashflow-budget" stroke="${colors.income}" d="${line(Array(count).fill(incomeBudget))}"/><path class="cashflow-budget" stroke="${colors.expense}" d="${line(Array(count).fill(-expenseBudget))}"/><path class="cashflow-budget" stroke="${colors.cash}" d="${line(Array(count).fill(cashBudget))}"/>`
+      ? `<path class="cashflow-budget" stroke="${colors.income}" d="${line(incomeBudget)}"/><path class="cashflow-budget" stroke="${colors.expense}" d="${line(expenseBudget.map((value) => -value))}"/><path class="cashflow-budget" stroke="${colors.cash}" d="${line(cashBudget)}"/>`
       : "";
   const points = cashTotals
     .map(
@@ -1309,23 +1351,90 @@ async function loadCashFlow() {
 async function loadBudget() {
   const params = new URLSearchParams({
     scope: selectedScope("#budget-scope-filter"),
+    effectiveDate: $("#budget-effective-date").value || today(),
   });
-  const result = await api(`/api/v1/budgets?${params}`);
-  state.categories = result.data;
+  const [result, history] = await Promise.all([
+    api(`/api/v1/budgets?${params}`),
+    api("/api/v1/budget-history"),
+  ]);
+  state.budgetHistory = history.data;
+  renderBudgetEditor(result.data);
+  renderBudgetHistory();
+}
+function renderBudgetEditor(categories) {
   for (const type of ["expense", "income"]) {
-    const rows = state.categories.filter(
-      (item) => item.active !== 0 && item.kind === type,
-    );
-    $(`#${type}-budget-list`).innerHTML = rows
+    const groups = new Map();
+    for (const item of categories.filter(
+      (c) => c.active !== 0 && c.kind === type,
+    )) {
+      const key = JSON.stringify([
+        state.separatePersonalBusiness ? item.budgetScope : "",
+        item.masterCategoryId,
+      ]);
+      if (!groups.has(key))
+        groups.set(key, {
+          name: item.masterName || "Unassigned",
+          scope: item.budgetScope,
+          items: [],
+        });
+      groups.get(key).items.push(item);
+    }
+    $(`#${type}-budget-list`).innerHTML = [...groups.values()]
       .map(
-        (item) =>
-          `<label class="budget-input"><span>${escapeHtml(item.name)}</span><input name="budget-${escapeHtml(item.id)}" data-budget-id="${escapeHtml(item.id)}" data-budget-kind="${type}" type="number" min="0" step="0.01" value="${dollars(item.monthlyBudgetMinor)}" /></label>`,
+        (group) =>
+          `<section class="budget-master-group"><div class="budget-group-heading"><h3>${escapeHtml(group.name)}</h3>${state.separatePersonalBusiness ? `<small>${group.scope === "business" ? "Business" : "Personal"}</small>` : ""}<strong data-master-budget-total></strong></div>${group.items.map((item) => `<label class="budget-input"><span>${escapeHtml(item.name)}</span><input data-budget-id="${escapeHtml(item.id)}" data-budget-kind="${type}" type="number" min="0" step="0.01" value="${dollars(item.monthlyBudgetMinor)}"/></label>`).join("")}</section>`,
       )
       .join("");
   }
   updateBudgetTotals();
 }
+function renderBudgetHistory() {
+  const history = state.budgetHistory.slice().reverse();
+  $("#budget-history-list").innerHTML = history.length
+    ? history
+        .map((snapshot) => {
+          const next = state.budgetHistory
+            .filter((s) => s.effectiveDate > snapshot.effectiveDate)
+            .sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate))[0];
+          const revision = state.budgetHistory.some(
+            (s) =>
+              s.effectiveDate === snapshot.effectiveDate &&
+              s.revision > snapshot.revision,
+          );
+          const previous = state.budgetHistory
+            .filter(
+              (s) =>
+                s.effectiveDate < snapshot.effectiveDate ||
+                (s.effectiveDate === snapshot.effectiveDate &&
+                  s.revision < snapshot.revision),
+            )
+            .at(-1);
+          const totals = (kind) =>
+            snapshot.items
+              .filter((i) => i.kind === kind)
+              .reduce((sum, i) => sum + i.monthlyBudgetMinor, 0);
+          return `<details class="budget-history-entry"><summary><strong>${escapeHtml(snapshot.name || "Budget snapshot")}</strong><span>${snapshot.effectiveDate === "0001-01-01" ? "Baseline" : escapeHtml(snapshot.effectiveDate)} · revision ${snapshot.revision}${revision ? " · superseded" : next ? ` · until ${new Date(Date.parse(next.effectiveDate + "T00:00:00Z") - 86400000).toISOString().slice(0, 10)}` : " · ongoing"}</span></summary><p>Monthly expenses ${money.format(dollars(totals("expense")))} · income ${money.format(dollars(totals("income")))}</p><button type="button" class="secondary" data-copy-budget="${escapeHtml(snapshot.id)}">Use as starting point</button><div class="history-items">${snapshot.items
+            .map((item) => {
+              const before = previous?.items.find(
+                (i) => i.categoryId === item.categoryId,
+              )?.monthlyBudgetMinor;
+              return `<div><span>${escapeHtml(item.masterName)} / ${escapeHtml(item.name)}${state.separatePersonalBusiness ? ` · ${escapeHtml(item.budgetScope)}` : ""}</span><strong>${money.format(dollars(item.monthlyBudgetMinor))}</strong><small>${before === undefined ? "" : `Change ${money.format(dollars(item.monthlyBudgetMinor - before))}`}</small></div>`;
+            })
+            .join("")}</div></details>`;
+        })
+        .join("")
+    : "<p>No saved snapshots yet. Your first save will preserve an initial baseline.</p>";
+}
 function updateBudgetTotals() {
+  $(".budget-master-group").forEach((group) => {
+    const total = $("[data-budget-id]", group).reduce(
+      (sum, input) => sum + cents(input.value || 0),
+      0,
+    );
+    $("[data-master-budget-total]", group).textContent = money.format(
+      dollars(total),
+    );
+  });
   const total = (kind) =>
     $$(`[data-budget-kind="${kind}"]`).reduce(
       (sum, input) => sum + cents(input.value || 0),
@@ -1342,6 +1451,7 @@ async function loadNetWorth() {
     startDate: $("#networth-start-date").value,
     endDate: $("#networth-end-date").value,
     scope: selectedScope("#networth-scope-filter"),
+    resolution: state.netWorthResolution,
   });
   const [balances, projection, timeline, projectionRules] = await Promise.all([
     api(`/api/v1/balance-snapshots?${range}`),
@@ -1618,6 +1728,10 @@ function renderAccountNetWorthChart() {
       }).format(dollars(minor)),
     monthLabel = (date) =>
       new Intl.DateTimeFormat("en-CA", {
+        ...(state.netWorthResolution === "daily" ||
+        state.netWorthResolution === "weekly"
+          ? { day: "numeric" }
+          : {}),
         month: "short",
         year: "numeric",
         timeZone: "UTC",
@@ -1961,6 +2075,10 @@ async function loadImportSuggestions() {
 }
 
 document.addEventListener("click", (event) => {
+  $(".filter-multiselect[open]").forEach((filter) => {
+    if (!filter.contains(event.target)) filter.open = false;
+  });
+
   const netWorthSeries = event.target.closest?.("[data-networth-series]");
   if (netWorthSeries) {
     state.selectedNetWorthSeries = netWorthSeries.dataset.networthSeries;
@@ -2016,6 +2134,52 @@ document.addEventListener("click", (event) => {
   }
   const target = event.target.closest("button");
   if (!target) return;
+  if (target.dataset.resolutionStep) {
+    const levels = ["yearly", "quarterly", "monthly", "weekly", "daily"];
+    const next = Math.max(
+      0,
+      Math.min(
+        levels.length - 1,
+        levels.indexOf(state.netWorthResolution) +
+          Number(target.dataset.resolutionStep),
+      ),
+    );
+    state.netWorthResolution = levels[next];
+    $("#networth-resolution-label").textContent =
+      levels[next][0].toUpperCase() + levels[next].slice(1);
+    $("[data-resolution-step]").forEach(
+      (button) =>
+        (button.disabled =
+          Number(button.dataset.resolutionStep) < 0 ? next === 0 : next === 4),
+    );
+    void run(loadNetWorth);
+    return;
+  }
+  if (target.dataset.copyBudget) {
+    void run(async () => {
+      const snapshot = state.budgetHistory.find(
+        (s) => s.id === target.dataset.copyBudget,
+      );
+      const result = await api("/api/v1/budgets");
+      const scope = selectedScope("#budget-scope-filter");
+      renderBudgetEditor(
+        result.data
+          .filter((c) => scope === "both" || c.budgetScope === scope)
+          .map((c) => ({
+            ...c,
+            monthlyBudgetMinor:
+              snapshot.items.find((i) => i.categoryId === c.id)
+                ?.monthlyBudgetMinor ?? 0,
+          })),
+      );
+      $("#budget-snapshot-name").value = snapshot.name + " (copy)";
+      $("#budget-effective-date").value = today();
+      notify(
+        "Copied into the editor. Choose an effective date and save a new snapshot.",
+      );
+    });
+    return;
+  }
   if (target.dataset.filterAction) {
     const key = target.dataset.filterKey;
     if (target.dataset.filterAction === "clear") {
@@ -2490,6 +2654,8 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape")
+    $(".filter-multiselect[open]").forEach((filter) => (filter.open = false));
   const series = event.target.closest?.("[data-networth-series]");
   if (series && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();
@@ -2698,6 +2864,11 @@ $("#account-form").addEventListener("submit", (event) => {
     notify(id ? "Account updated." : "Account added.");
   });
 });
+$("#budget-effective-date").value = today();
+$("#budget-effective-date").addEventListener(
+  "change",
+  () => void run(loadBudget),
+);
 $("#budget-form").addEventListener("input", updateBudgetTotals);
 $("#budget-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -2710,10 +2881,30 @@ $("#budget-form").addEventListener("submit", (event) => {
         categoryId: input.dataset.budgetId,
         monthlyBudgetMinor: cents(input.value || 0),
       }));
+      const effectiveDate = $("#budget-effective-date").value;
+      const existing = state.budgetHistory.some(
+        (s) => s.effectiveDate === effectiveDate,
+      );
+      const next = state.budgetHistory
+        .filter((s) => s.effectiveDate > effectiveDate)
+        .sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate))[0];
+      if (
+        (existing || effectiveDate < today()) &&
+        !confirm(
+          `${existing ? "Correct the snapshot" : "Save a backdated snapshot"} effective ${effectiveDate} ${next ? "until " + next.effectiveDate : "onward"}? Historical comparisons in this period will change. Earlier revisions will remain in history.`,
+        )
+      )
+        return;
       await api("/api/v1/budgets", {
         method: "PUT",
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({
+          items,
+          effectiveDate,
+          name: $("#budget-snapshot-name").value,
+          correction: existing,
+        }),
       });
+      await loadBudget();
       state.categories.forEach((category) => {
         const input = $(`[data-budget-id="${category.id}"]`);
         if (input) category.monthlyBudgetMinor = cents(input.value || 0);

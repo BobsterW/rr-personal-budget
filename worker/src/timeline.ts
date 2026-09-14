@@ -202,6 +202,12 @@ export function buildNetWorthTimeline(
   endDate: string,
   today: string,
   projectionRules: ProjectionRule[] = [],
+  resolution:
+    | "yearly"
+    | "quarterly"
+    | "monthly"
+    | "weekly"
+    | "daily" = "monthly",
 ): TimelinePoint[] {
   const dates = timelineDates(
     startDate,
@@ -209,6 +215,17 @@ export function buildNetWorthTimeline(
     today,
     snapshots.map((snapshot) => snapshot.date),
   );
+  // Daily internal steps keep payment timing and interest identical at every
+  // display resolution. Coarser resolutions only reduce returned points.
+  const dateSet = new Set(dates);
+  const daily = utc(startDate < today ? startDate : today);
+  const end = utc(endDate);
+  while (daily <= end) {
+    const date = daily.toISOString().slice(0, 10);
+    if (!dateSet.has(date)) dates.push(date);
+    daily.setUTCDate(daily.getUTCDate() + 1);
+  }
+  dates.sort();
   const actualSnapshots = snapshots.filter(
     (snapshot) => snapshot.date <= today,
   );
@@ -270,5 +287,19 @@ export function buildNetWorthTimeline(
     });
     previous = date;
   }
-  return result;
+  return result.filter((point) => {
+    if (point.date < startDate) return false;
+    if (
+      [startDate, endDate, today].includes(point.date) ||
+      snapshots.some((s) => s.date === point.date)
+    )
+      return true;
+    const date = utc(point.date);
+    if (resolution === "daily") return true;
+    if (resolution === "weekly") return date.getUTCDay() === 1;
+    if (date.getUTCDate() !== 1) return false;
+    if (resolution === "yearly") return date.getUTCMonth() === 0;
+    if (resolution === "quarterly") return date.getUTCMonth() % 3 === 0;
+    return true;
+  });
 }
