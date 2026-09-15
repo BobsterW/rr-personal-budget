@@ -8,7 +8,7 @@
       content="Private transaction, monthly spending, and net-worth tracker."
     />
     <title>R&R Budget</title>
-    <link rel="stylesheet" href="styles.css?v=7.15.1" />
+    <link rel="stylesheet" href="styles.css?v=7.16" />
   </head>
   <body>
     <!-- Authentication is the only visible section until /auth/me confirms a session. -->
@@ -706,11 +706,34 @@
         <div class="hero">
           <div>
             <p class="eyebrow">Make it yours</p>
-            <h1>Categories & accounts</h1>
+            <h1>Settings</h1>
           </div>
         </div>
+        <div
+          class="settings-tabs"
+          role="tablist"
+          aria-label="Settings sections"
+        >
+          <button type="button" data-settings-tab="categories">
+            Categories
+          </button>
+          <button type="button" class="secondary" data-settings-tab="accounts">
+            Accounts and Access
+          </button>
+          <button
+            type="button"
+            class="secondary"
+            data-settings-tab="appearance"
+          >
+            Appearance
+          </button>
+        </div>
         <div class="settings-accordions">
-          <details class="panel settings-disclosure" open>
+          <details
+            class="panel settings-disclosure"
+            data-settings-section="categories"
+            open
+          >
             <summary>Categories</summary>
             <div class="settings-content">
               <form id="category-form" class="inline-form">
@@ -728,7 +751,10 @@
               <ul id="categories-list" class="settings-list"></ul>
             </div>
           </details>
-          <details class="panel settings-disclosure">
+          <details
+            class="panel settings-disclosure"
+            data-settings-section="categories"
+          >
             <summary>Master categories</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -777,18 +803,26 @@
               <ul id="master-categories-list" class="settings-list"></ul>
             </div>
           </details>
-          <details class="panel settings-disclosure">
+          <details
+            class="panel settings-disclosure"
+            data-settings-section="accounts"
+            hidden
+          >
             <summary>Accounts</summary>
             <div class="settings-content">
               <p class="fine-print">
                 Add banks, cards, investments, property, vehicles, and loans.
-                Each account can have its own projection assumptions.
+                Account settings describe what an account is. Linked Projection
+                Rules describe every future change to it.
               </p>
               <button data-dialog="account-dialog">Add account</button>
               <ul id="accounts-list" class="settings-list"></ul>
             </div>
           </details>
-          <details class="panel settings-disclosure">
+          <details
+            class="panel settings-disclosure"
+            data-settings-section="categories"
+          >
             <summary>Automatic category rules</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -820,8 +854,13 @@
               <ul id="category-rules-list" class="settings-list"></ul>
             </div>
           </details>
-          <details class="panel settings-disclosure">
-            <summary>Website colors</summary>
+          <details
+            class="panel settings-disclosure"
+            data-settings-section="appearance"
+            hidden
+            open
+          >
+            <summary>Website colors and format</summary>
             <div class="settings-content">
               <p class="fine-print">
                 Choose a preset or customize the colors saved to your account.
@@ -860,6 +899,51 @@
                 <label
                   >Chart accent<input type="color" name="chartAccentColor"
                 /></label>
+                <label
+                  >Spacing<select name="spacing">
+                    <option value="compact">Compact</option>
+                    <option value="comfortable">Comfortable</option>
+                    <option value="spacious">Spacious</option>
+                  </select></label
+                >
+                <label
+                  >Font size<select name="fontSize">
+                    <option value="small">Small</option>
+                    <option value="standard">Standard</option>
+                    <option value="large">Large</option>
+                  </select></label
+                >
+                <label
+                  >Heading style<select name="headingStyle">
+                    <option value="classic">Classic serif</option>
+                    <option value="modern">Modern sans-serif</option>
+                  </select></label
+                >
+                <label
+                  >Card corners<select name="cardCorners">
+                    <option value="subtle">Subtle</option>
+                    <option value="rounded">Rounded</option>
+                    <option value="extra">Extra rounded</option>
+                  </select></label
+                >
+                <label
+                  >Card shadow<select name="cardShadow">
+                    <option value="none">None</option>
+                    <option value="subtle">Subtle</option>
+                    <option value="elevated">Elevated</option>
+                  </select></label
+                >
+                <label
+                  >Graph text size<select name="graphTextSize">
+                    <option value="small">Small</option>
+                    <option value="standard">Standard</option>
+                    <option value="large">Large</option>
+                  </select></label
+                >
+                <label class="checkbox-label"
+                  ><input type="checkbox" name="reduceAnimation" value="true" />
+                  Reduce animation</label
+                >
                 <div class="theme-preview">
                   <strong>Live preview</strong>
                   <span class="theme-preview-positive">+$1,250 income</span>
@@ -878,7 +962,12 @@
               </form>
             </div>
           </details>
-          <details id="workspace-access-card" class="panel settings-disclosure">
+          <details
+            id="workspace-access-card"
+            class="panel settings-disclosure"
+            data-settings-section="accounts"
+            hidden
+          >
             <summary>Budget access</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -904,7 +993,11 @@
               <ul id="members-list" class="settings-list"></ul>
             </div>
           </details>
-          <details id="archived-items-card" class="panel settings-disclosure">
+          <details
+            id="archived-items-card"
+            class="panel settings-disclosure"
+            data-settings-section="categories"
+          >
             <summary>Archived items</summary>
             <div class="settings-content">
               <p class="fine-print">
@@ -1089,13 +1182,20 @@
               <option value="income">Income into an account</option>
               <option value="expense">Expense from an account</option>
               <option value="transfer">Transfer / debt payment</option>
+              <option value="asset_growth">
+                Account growth / appreciation
+              </option>
+              <option value="yield">Interest or dividend yield</option>
+              <option value="debt_payment">Mortgage / loan payment</option>
+              <option value="debt_interest">Credit-card interest</option>
+              <option value="extra_principal">Extra principal payment</option>
             </select></label
           >
           <label
             >Amount (CAD)<input
               name="amount"
               type="number"
-              min="0.01"
+              min="0"
               step="0.01"
               required
           /></label>
@@ -1104,6 +1204,8 @@
               <option>monthly</option>
               <option>yearly</option>
               <option>once</option>
+              <option>weekly</option>
+              <option>biweekly</option>
             </select></label
           >
           <label
@@ -1116,6 +1218,54 @@
           <label id="projection-to-field"
             >To account<select name="toAccountId"></select
           ></label>
+          <label id="projection-linked-field"
+            >Linked account<select name="linkedAccountId"></select
+          ></label>
+          <label id="projection-category-field"
+            >Interest/income category<select name="categoryId"></select
+          ></label>
+          <label id="projection-rate-field"
+            ><span id="projection-rate-label">Annual growth rate (%)</span
+            ><input name="annualRate" type="number" step="0.01" value="0"
+          /></label>
+          <label id="projection-compounding-field"
+            >Compounding interval<select name="compoundingInterval">
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+            </select></label
+          >
+          <label id="projection-treatment-field"
+            >Destination treatment<select name="treatment">
+              <option value="deposit">Deposit into selected account</option>
+              <option value="reinvest">Reinvest in linked account</option>
+              <option value="included_in_growth">
+                Included in total growth
+              </option>
+            </select></label
+          >
+          <label id="projection-amortization-field"
+            >Remaining amortization (months)<input
+              name="amortizationMonths"
+              type="number"
+              min="1"
+              step="1"
+          /></label>
+          <label id="projection-term-field"
+            >Current term (months)<input
+              name="termMonths"
+              type="number"
+              min="1"
+              step="1"
+          /></label>
+          <label id="projection-renewal-date-field"
+            >Renewal date<input name="renewalDate" type="date"
+          /></label>
+          <label id="projection-renewal-rate-field"
+            >Projected renewal rate (%)<input
+              name="renewalRate"
+              type="number"
+              step="0.01"
+          /></label>
         </div>
         <p id="projection-rule-help" class="fine-print"></p>
         <div class="dialog-actions">
@@ -1154,6 +1304,17 @@
             </select></label
           >
           <label
+            >Account model<select name="accountModel" required>
+              <option value="cash">Cash / chequing</option>
+              <option value="savings">Savings</option>
+              <option value="investment">Investment</option>
+              <option value="property">Property / other asset</option>
+              <option value="credit_card">Credit card</option>
+              <option value="mortgage">Mortgage</option>
+              <option value="loan">Other loan</option>
+            </select></label
+          >
+          <label
             >Net-worth group<select name="liquidityClass" required>
               <option value="liquid">Liquid</option>
               <option value="fixed">Fixed</option>
@@ -1165,44 +1326,6 @@
               <option value="business">Business</option>
             </select></label
           >
-          <label
-            >Interest due (% yearly)<input
-              name="annualInterest"
-              type="number"
-              step="0.01"
-              value="0"
-          /></label>
-          <label
-            >Regular payment<input
-              name="paymentAmount"
-              type="number"
-              min="0"
-              step="0.01"
-              value="0"
-          /></label>
-          <label
-            >Payment frequency<select name="paymentFrequency">
-              <option value="none">None</option>
-              <option>monthly</option>
-              <option>yearly</option>
-            </select></label
-          >
-          <label
-            >Equity built per year<input
-              name="annualEquityGain"
-              type="number"
-              min="0"
-              step="0.01"
-              value="0"
-          /></label>
-          <label
-            >Dividends per year<input
-              name="annualDividend"
-              type="number"
-              min="0"
-              step="0.01"
-              value="0"
-          /></label>
           <label class="wide"
             >Projection notes<textarea
               name="projectionNotes"
@@ -1212,8 +1335,9 @@
           </label>
         </div>
         <p class="fine-print">
-          Use asset for a home or vehicle and liability for a mortgage or loan.
-          Record the current value separately under Net worth → Record balance.
+          After saving, use “Add linked rule” beside the account to configure
+          interest, growth, dividends, or a loan payment. The same rule appears
+          in Account settings and the main Projection Rules card.
         </p>
         <div class="dialog-actions">
           <button type="button" class="secondary" data-close>Cancel</button
@@ -1256,6 +1380,6 @@
       </form>
     </dialog>
     <script src="config.js?v=7.9.0"></script>
-    <script type="module" src="app.js?v=7.15.1"></script>
+    <script type="module" src="app.js?v=7.16"></script>
   </body>
 </html>

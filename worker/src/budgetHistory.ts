@@ -14,6 +14,8 @@ export interface BudgetSnapshot {
   name: string;
   revision: number;
   createdAt: string;
+  active?: boolean;
+  archivedAt?: string | null;
   items: BudgetItem[];
 }
 

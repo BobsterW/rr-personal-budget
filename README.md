@@ -1,6 +1,15 @@
-# R&R Budget v7.15.1
+# R&R Budget v7.16
 
 A private, multi-user budget and net-worth application inspired by `R&R Expenses Tracking 06-29-2026.xlsx`. Every signed-in user has an independent transaction ledger, categories, accounts, budgets, balances, imports, and projections.
+
+## V7.16 changes
+
+- Budget snapshots can be corrected, archived, restored, and permanently deleted through an archive-first history lifecycle.
+- Monthly Activity starts with collapsed master categories and expands the selected visual category automatically.
+- Account calculations are visible, account-linked Projection Rules for growth, yield, debt interest, loan payments, and extra principal.
+- Net-worth defaults to one year of history and three projected years, with faster occurrence calculations and reliable range limits.
+- Settings is organized into Categories, Accounts and Access, and Appearance tabs with formatting presets.
+- Charts retain readable plot widths and horizontal touch scrolling on narrow screens and dense desktop ranges.
 
 ## V7.15.1 changes
 

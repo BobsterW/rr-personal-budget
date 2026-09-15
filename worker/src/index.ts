@@ -66,11 +66,18 @@ const PROJECTION_RULE_TYPES = new Set<ProjectionRuleType>([
   "income",
   "expense",
   "transfer",
+  "asset_growth",
+  "yield",
+  "debt_payment",
+  "debt_interest",
+  "extra_principal",
 ]);
 const PROJECTION_RULE_FREQUENCIES = new Set<ProjectionRuleFrequency>([
   "monthly",
   "yearly",
   "once",
+  "weekly",
+  "biweekly",
 ]);
 type BudgetScope = "personal" | "business" | "both";
 const BUDGET_SCOPES = new Set<BudgetScope>(["personal", "business", "both"]);
@@ -285,6 +292,7 @@ function accountInput(body: Record<string, unknown>) {
     body.liquidityClass ?? "liquid",
   ) as LiquidityClass;
   const scope = String(body.budgetScope ?? "personal");
+  const accountModel = String(body.accountModel ?? "cash");
   if (!ACCOUNT_TYPES.has(accountType))
     throw new ApiError(422, "VALIDATION_ERROR", "Invalid account type.");
   if (!PAYMENT_FREQUENCIES.has(paymentFrequency))
@@ -297,6 +305,18 @@ function accountInput(body: Record<string, unknown>) {
       "VALIDATION_ERROR",
       "Invalid account budget group.",
     );
+  if (
+    !new Set([
+      "cash",
+      "savings",
+      "investment",
+      "property",
+      "credit_card",
+      "mortgage",
+      "loan",
+    ]).has(accountModel)
+  )
+    throw new ApiError(422, "VALIDATION_ERROR", "Invalid account model.");
   const integerFields = [
     "annualGrowthBps",
     "paymentAmountMinor",
@@ -328,6 +348,7 @@ function accountInput(body: Record<string, unknown>) {
   return {
     name,
     accountType,
+    accountModel,
     paymentFrequency,
     liquidityClass,
     budgetScope: scope,
@@ -918,8 +939,58 @@ async function route(request: Request, env: Env): Promise<Response> {
         masterCategories: data.masterCategories.map((row) =>
           toCamel(row as Record<string, unknown>),
         ),
+        budgetSnapshots: data.budgetSnapshots.map((row) =>
+          toCamel(row as Record<string, unknown>),
+        ),
       },
     });
+  }
+  const archivedBudgetMatch = path.match(
+    /^\/api\/v1\/archived-items\/budget\/([^/]+)$/,
+  );
+  if (archivedBudgetMatch && method === "POST") {
+    if (workspace.role !== "owner")
+      throw new ApiError(
+        403,
+        "OWNER_REQUIRED",
+        "Only the budget owner can restore snapshots.",
+      );
+    if (!(await repo.restoreBudgetSnapshot(archivedBudgetMatch[1]!)))
+      throw new ApiError(
+        404,
+        "NOT_FOUND",
+        "Archived budget snapshot not found.",
+      );
+    return json({ data: { restored: true } });
+  }
+  if (archivedBudgetMatch && method === "DELETE") {
+    if (workspace.role !== "owner")
+      throw new ApiError(
+        403,
+        "OWNER_REQUIRED",
+        "Only the budget owner can permanently delete snapshots.",
+      );
+    if (!(await repo.permanentlyDeleteBudgetSnapshot(archivedBudgetMatch[1]!)))
+      throw new ApiError(
+        404,
+        "NOT_FOUND",
+        "Archived budget snapshot not found.",
+      );
+    return new Response(null, { status: 204 });
+  }
+  const budgetSnapshotMatch = path.match(
+    /^\/api\/v1\/budget-history\/([^/]+)$/,
+  );
+  if (budgetSnapshotMatch && method === "DELETE") {
+    if (workspace.role !== "owner")
+      throw new ApiError(
+        403,
+        "OWNER_REQUIRED",
+        "Only the budget owner can archive snapshots.",
+      );
+    if (!(await repo.archiveBudgetSnapshot(budgetSnapshotMatch[1]!)))
+      throw new ApiError(404, "NOT_FOUND", "Budget snapshot not found.");
+    return new Response(null, { status: 204 });
   }
   const archivedMatch = path.match(
     /^\/api\/v1\/archived-items\/(category|master)\/([^/]+)$/,
@@ -1505,7 +1576,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (path === "/api/v1/website-preferences" && method === "GET") {
     const record = await env.DB.prepare(
-      "SELECT highlight_color,background_color,card_color,text_color,positive_color,negative_color,chart_accent_color FROM website_preferences WHERE user_id=?",
+      "SELECT highlight_color,background_color,card_color,text_color,positive_color,negative_color,chart_accent_color,spacing,font_size,heading_style,card_corners,card_shadow,graph_text_size,reduce_animation FROM website_preferences WHERE user_id=?",
     )
       .bind(workspace.dataOwnerUserId)
       .first<Record<string, unknown>>();
@@ -1532,16 +1603,56 @@ async function route(request: Request, env: Env): Promise<Response> {
         );
       return value;
     });
+    const choice = (field: string, allowed: string[], fallback: string) => {
+      const value = String(body[field] ?? fallback);
+      if (!allowed.includes(value))
+        throw new ApiError(422, "VALIDATION_ERROR", `Invalid ${field}.`);
+      return value;
+    };
+    const appearance = {
+      spacing: choice(
+        "spacing",
+        ["compact", "comfortable", "spacious"],
+        "comfortable",
+      ),
+      fontSize: choice("fontSize", ["small", "standard", "large"], "standard"),
+      headingStyle: choice("headingStyle", ["classic", "modern"], "classic"),
+      cardCorners: choice(
+        "cardCorners",
+        ["subtle", "rounded", "extra"],
+        "rounded",
+      ),
+      cardShadow: choice(
+        "cardShadow",
+        ["none", "subtle", "elevated"],
+        "subtle",
+      ),
+      graphTextSize: choice(
+        "graphTextSize",
+        ["small", "standard", "large"],
+        "standard",
+      ),
+      reduceAnimation:
+        body.reduceAnimation === true || body.reduceAnimation === "true"
+          ? 1
+          : 0,
+    };
     const now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO website_preferences (user_id,highlight_color,background_color,card_color,text_color,positive_color,negative_color,chart_accent_color,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET highlight_color=excluded.highlight_color,background_color=excluded.background_color,card_color=excluded.card_color,text_color=excluded.text_color,positive_color=excluded.positive_color,negative_color=excluded.negative_color,chart_accent_color=excluded.chart_accent_color,updated_at=excluded.updated_at",
+      "INSERT INTO website_preferences (user_id,highlight_color,background_color,card_color,text_color,positive_color,negative_color,chart_accent_color,spacing,font_size,heading_style,card_corners,card_shadow,graph_text_size,reduce_animation,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET highlight_color=excluded.highlight_color,background_color=excluded.background_color,card_color=excluded.card_color,text_color=excluded.text_color,positive_color=excluded.positive_color,negative_color=excluded.negative_color,chart_accent_color=excluded.chart_accent_color,spacing=excluded.spacing,font_size=excluded.font_size,heading_style=excluded.heading_style,card_corners=excluded.card_corners,card_shadow=excluded.card_shadow,graph_text_size=excluded.graph_text_size,reduce_animation=excluded.reduce_animation,updated_at=excluded.updated_at",
     )
-      .bind(workspace.dataOwnerUserId, ...colors, now)
+      .bind(
+        workspace.dataOwnerUserId,
+        ...colors,
+        ...Object.values(appearance),
+        now,
+      )
       .run();
     return json({
-      data: Object.fromEntries(
-        fields.map((field, index) => [field, colors[index]]),
-      ),
+      data: Object.fromEntries([
+        ...fields.map((field, index) => [field, colors[index]]),
+        ...Object.entries(appearance),
+      ]),
     });
   }
 
@@ -1586,14 +1697,11 @@ async function route(request: Request, env: Env): Promise<Response> {
         "VALIDATION_ERROR",
         "Invalid projection frequency.",
       );
-    if (
-      !Number.isSafeInteger(body.amountMinor) ||
-      Number(body.amountMinor) <= 0
-    )
+    if (!Number.isSafeInteger(body.amountMinor) || Number(body.amountMinor) < 0)
       throw new ApiError(
         422,
         "VALIDATION_ERROR",
-        "amountMinor must be a positive integer number of cents.",
+        "amountMinor must be a non-negative integer number of cents.",
       );
     if (endDate && endDate < startDate)
       throw new ApiError(
@@ -1608,21 +1716,48 @@ async function route(request: Request, env: Env): Promise<Response> {
       toAccountId =
         typeof body.toAccountId === "string" && body.toAccountId
           ? body.toAccountId
+          : null,
+      linkedAccountId =
+        typeof body.linkedAccountId === "string" && body.linkedAccountId
+          ? body.linkedAccountId
+          : null,
+      categoryId =
+        typeof body.categoryId === "string" && body.categoryId
+          ? body.categoryId
           : null;
+    const computedRule = ["asset_growth", "yield", "debt_interest"].includes(
+      ruleType,
+    );
+    if (!computedRule && Number(body.amountMinor) <= 0)
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "This rule requires a positive amount.",
+      );
     const shapeValid =
       (ruleType === "income" && !fromAccountId && Boolean(toAccountId)) ||
       (ruleType === "expense" && Boolean(fromAccountId) && !toAccountId) ||
-      (ruleType === "transfer" &&
+      (["transfer", "extra_principal"].includes(ruleType) &&
         Boolean(fromAccountId) &&
         Boolean(toAccountId) &&
-        fromAccountId !== toAccountId);
+        fromAccountId !== toAccountId) ||
+      (["asset_growth", "yield", "debt_interest"].includes(ruleType) &&
+        Boolean(linkedAccountId)) ||
+      (ruleType === "debt_payment" &&
+        Boolean(fromAccountId) &&
+        Boolean(linkedAccountId) &&
+        fromAccountId !== linkedAccountId);
     if (!shapeValid)
       throw new ApiError(
         422,
         "VALIDATION_ERROR",
-        "Income needs a destination, expenses need a source, and transfers need different source and destination accounts.",
+        "The selected rule is missing one of its required account relationships.",
       );
-    for (const accountId of [fromAccountId, toAccountId].filter(Boolean)) {
+    for (const accountId of [
+      fromAccountId,
+      toAccountId,
+      linkedAccountId,
+    ].filter(Boolean)) {
       const account = await env.DB.prepare(
         "SELECT id FROM accounts WHERE id=? AND user_id=? AND active=1",
       )
@@ -1635,6 +1770,44 @@ async function route(request: Request, env: Env): Promise<Response> {
           "A selected account does not exist or is archived.",
         );
     }
+    if (categoryId) {
+      const category = await env.DB.prepare(
+        "SELECT id FROM categories WHERE id=? AND user_id=? AND active=1",
+      )
+        .bind(categoryId, workspace.dataOwnerUserId)
+        .first();
+      if (!category)
+        throw new ApiError(
+          422,
+          "INVALID_CATEGORY",
+          "The selected category does not exist or is archived.",
+        );
+    }
+    const annualRateBps = Number(body.annualRateBps ?? 0),
+      compoundingInterval = String(body.compoundingInterval ?? "monthly"),
+      treatment = String(body.treatment ?? "deposit");
+    if (
+      !Number.isSafeInteger(annualRateBps) ||
+      !["monthly", "yearly"].includes(compoundingInterval) ||
+      !["deposit", "reinvest", "included_in_growth"].includes(treatment)
+    )
+      throw new ApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Invalid rate, compounding interval, or treatment.",
+      );
+    const optionalInteger = (field: string) =>
+      body[field] === null || body[field] === "" || body[field] === undefined
+        ? null
+        : Number.isSafeInteger(Number(body[field])) && Number(body[field]) >= 0
+          ? Number(body[field])
+          : (() => {
+              throw new ApiError(
+                422,
+                "VALIDATION_ERROR",
+                `${field} must be a non-negative integer.`,
+              );
+            })();
     const input = {
       description,
       ruleType,
@@ -1644,6 +1817,17 @@ async function route(request: Request, env: Env): Promise<Response> {
       endDate,
       fromAccountId,
       toAccountId,
+      linkedAccountId,
+      categoryId,
+      annualRateBps,
+      compoundingInterval,
+      treatment,
+      amortizationMonths: optionalInteger("amortizationMonths"),
+      termMonths: optionalInteger("termMonths"),
+      renewalDate: body.renewalDate
+        ? requireDate(String(body.renewalDate), "renewalDate")
+        : null,
+      renewalRateBps: optionalInteger("renewalRateBps"),
     };
     const record = projectionRuleMatch
       ? await repo.updateProjectionRule(projectionRuleMatch[1]!, input)
@@ -1666,12 +1850,38 @@ async function route(request: Request, env: Env): Promise<Response> {
         "startDate",
       ),
       endDate = requireDate(url.searchParams.get("endDate"), "endDate"),
-      today = todayInTimezone(env.APP_TIMEZONE);
+      today = todayInTimezone(env.APP_TIMEZONE),
+      resolution = [
+        "yearly",
+        "quarterly",
+        "monthly",
+        "weekly",
+        "daily",
+      ].includes(url.searchParams.get("resolution") ?? "")
+        ? (url.searchParams.get("resolution") as
+            | "yearly"
+            | "quarterly"
+            | "monthly"
+            | "weekly"
+            | "daily")
+        : "monthly";
     if (startDate > endDate)
       throw new ApiError(
         422,
         "VALIDATION_ERROR",
         "startDate must be on or before endDate.",
+      );
+    const requestedDays =
+      (Date.parse(`${endDate}T00:00:00Z`) -
+        Date.parse(`${startDate}T00:00:00Z`)) /
+      86_400_000;
+    const maximumDays =
+      resolution === "daily" ? 3_653 : resolution === "weekly" ? 7_305 : 14_610;
+    if (requestedDays > maximumDays)
+      throw new ApiError(
+        422,
+        "TIMELINE_RANGE_TOO_LARGE",
+        `The ${resolution} net-worth view is too large to render reliably. Choose a shorter range or less detailed resolution.`,
       );
     const assumptionRow = await env.DB.prepare(
       "SELECT * FROM projection_assumptions WHERE user_id=?",
@@ -1725,6 +1935,26 @@ async function route(request: Request, env: Env): Promise<Response> {
         endDate: item.endDate ? String(item.endDate) : null,
         fromAccountId: item.fromAccountId ? String(item.fromAccountId) : null,
         toAccountId: item.toAccountId ? String(item.toAccountId) : null,
+        linkedAccountId: item.linkedAccountId
+          ? String(item.linkedAccountId)
+          : null,
+        categoryId: item.categoryId ? String(item.categoryId) : null,
+        annualRateBps: Number(item.annualRateBps ?? 0),
+        compoundingInterval: String(item.compoundingInterval ?? "monthly") as
+          | "monthly"
+          | "yearly",
+        treatment: String(item.treatment ?? "deposit") as
+          | "deposit"
+          | "reinvest"
+          | "included_in_growth",
+        amortizationMonths: item.amortizationMonths
+          ? Number(item.amortizationMonths)
+          : null,
+        termMonths: item.termMonths ? Number(item.termMonths) : null,
+        renewalDate: item.renewalDate ? String(item.renewalDate) : null,
+        renewalRateBps: item.renewalRateBps
+          ? Number(item.renewalRateBps)
+          : null,
       };
     });
     const assumptions: ProjectionAssumptions = {
@@ -1747,11 +1977,7 @@ async function route(request: Request, env: Env): Promise<Response> {
           endDate,
           today,
           projectionRules,
-          ["yearly", "quarterly", "monthly", "weekly", "daily"].includes(
-            url.searchParams.get("resolution") ?? "",
-          )
-            ? (url.searchParams.get("resolution") as "monthly")
-            : "monthly",
+          resolution,
         ),
       },
     });

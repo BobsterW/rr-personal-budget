@@ -31,6 +31,90 @@ const accounts: TimelineAccount[] = [
 ];
 
 describe("net-worth timeline", () => {
+  it("splits a linked mortgage payment into interest and principal", () => {
+    const mortgageAccounts: TimelineAccount[] = [
+      { ...accounts[0]!, id: "checking", name: "Checking" },
+      {
+        ...accounts[0]!,
+        id: "mortgage",
+        name: "Mortgage",
+        accountType: "liability",
+      },
+    ];
+    const points = buildNetWorthTimeline(
+      mortgageAccounts,
+      [
+        { accountId: "checking", date: "2026-09-01", balanceMinor: 1_000_000 },
+        {
+          accountId: "mortgage",
+          date: "2026-09-01",
+          balanceMinor: -50_000_000,
+        },
+      ],
+      [],
+      assumptions,
+      "2026-09-01",
+      "2026-10-01",
+      "2026-09-01",
+      [
+        {
+          id: "mortgage-rule",
+          description: "Mortgage payment",
+          ruleType: "debt_payment",
+          amountMinor: 263_000,
+          frequency: "monthly",
+          startDate: "2026-10-01",
+          endDate: null,
+          fromAccountId: "checking",
+          toAccountId: null,
+          linkedAccountId: "mortgage",
+          annualRateBps: 400,
+        },
+      ],
+    );
+    const end = points.at(-1)!;
+    expect(end.accounts.find((a) => a.id === "checking")?.balanceMinor).toBe(
+      737_000,
+    );
+    expect(end.accounts.find((a) => a.id === "mortgage")?.balanceMinor).toBe(
+      -49_900_687,
+    );
+    expect(end.netWorthMinor).toBe(-49_163_687);
+  });
+
+  it("deposits linked savings yield into its selected destination", () => {
+    const points = buildNetWorthTimeline(
+      [
+        { ...accounts[0]!, id: "savings" },
+        { ...accounts[0]!, id: "cash" },
+      ],
+      [{ accountId: "savings", date: "2026-09-01", balanceMinor: 2_000_000 }],
+      [],
+      assumptions,
+      "2026-09-01",
+      "2026-10-01",
+      "2026-09-01",
+      [
+        {
+          id: "interest",
+          description: "Savings interest",
+          ruleType: "yield",
+          amountMinor: 0,
+          frequency: "monthly",
+          startDate: "2026-10-01",
+          endDate: null,
+          fromAccountId: null,
+          toAccountId: "cash",
+          linkedAccountId: "savings",
+          annualRateBps: 400,
+          treatment: "deposit",
+        },
+      ],
+    );
+    expect(
+      points.at(-1)!.accounts.find((a) => a.id === "cash")?.balanceMinor,
+    ).toBe(6_547);
+  });
   it("changes resolution without changing the final financial result", () => {
     const resolutions = [
       "yearly",
@@ -217,27 +301,34 @@ describe("net-worth timeline", () => {
     expect(value("2027-07-01")).toBe(3_200_000);
   });
 
-  it("uses future balances as authoritative anchors and continues variables", () => {
-    const growingAccount = [
-      {
-        ...accounts[0]!,
-        annualEquityGainMinor: 120_000,
-      },
-    ];
+  it("uses future balances as authoritative anchors and continues visible rules", () => {
     const points = buildNetWorthTimeline(
-      growingAccount,
+      accounts,
       [{ accountId: "cash", date: "2027-12-15", balanceMinor: 50_000_000 }],
       [],
       assumptions,
       "2026-09-01",
       "2028-12-15",
       "2026-09-01",
+      [
+        {
+          id: "linked-growth",
+          description: "Visible monthly account contribution",
+          ruleType: "income",
+          amountMinor: 10_000,
+          frequency: "monthly",
+          startDate: "2027-12-15",
+          endDate: null,
+          fromAccountId: null,
+          toAccountId: "cash",
+        },
+      ],
     );
     const at = (date: string) =>
       points.find((point) => point.date === date)?.accounts[0]?.balanceMinor;
     expect(at("2026-09-01")).toBe(0);
     expect(at("2027-12-15")).toBe(50_000_000);
-    expect(at("2028-12-15")).toBe(50_120_246);
+    expect(at("2028-12-15")).toBe(50_120_000);
   });
 
   it("resets the projection at every later balance entry", () => {

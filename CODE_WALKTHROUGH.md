@@ -1,4 +1,4 @@
-# V7.15.1 code walkthrough
+# V7.16 code walkthrough
 
 Budget history is stored in `budget_snapshots` and normalized `budget_snapshot_items` rows. `worker/src/budgetHistory.ts` selects the latest revision per effective date and calculates exact calendar-day allowances. The repository uses that one calculation for summaries and charts, while the Budget page creates immutable revisions and displays the audit history.
 

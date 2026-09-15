@@ -1109,6 +1109,19 @@ td {
   border-bottom: 1px solid var(--line);
   padding: 12px 0;
 }
+.account-linked-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.linked-rule-chip {
+  background: color-mix(in srgb, var(--green) 9%, var(--panel));
+  border-color: color-mix(in srgb, var(--green) 25%, var(--line));
+  color: var(--ink);
+  font-size: 0.78rem;
+  padding: 6px 9px;
+}
 .projection-chart {
   width: 100%;
   max-width: 100%;
@@ -1120,12 +1133,14 @@ td {
 .chart-scroll {
   width: 100%;
   max-width: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .projection-chart svg {
   display: block;
   width: 100%;
-  min-width: 0;
+  min-width: 1100px;
   max-width: 100%;
   height: auto;
   overflow: hidden;
@@ -1646,15 +1661,91 @@ td {
 .trend-chart-frame {
   width: 100%;
   max-width: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
   border-bottom: 1px solid var(--line);
 }
 .trend-chart svg {
   display: block;
   width: 100%;
   max-width: 100%;
+  min-width: 1050px;
   height: auto;
   overflow: hidden;
+}
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+[data-settings-section][hidden] {
+  display: none !important;
+}
+.activity-master-group {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+}
+.activity-master-group > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+}
+.activity-master-group > summary::-webkit-details-marker {
+  display: none;
+}
+.activity-master-group[open] .master-expand-indicator {
+  transform: rotate(180deg);
+}
+.master-expand-indicator {
+  font-size: 1.4rem;
+  transition: transform 0.18s ease;
+}
+.activity-master-categories {
+  padding-top: 12px;
+}
+html[data-font-size="small"] {
+  font-size: 14px;
+}
+html[data-font-size="large"] {
+  font-size: 18px;
+}
+html[data-heading-style="modern"] h1,
+html[data-heading-style="modern"] h2 {
+  font-family: inherit;
+}
+html[data-card-corners="subtle"] .panel {
+  border-radius: 8px;
+}
+html[data-card-corners="extra"] .panel {
+  border-radius: 32px;
+}
+html[data-card-shadow="none"] .panel {
+  box-shadow: none;
+}
+html[data-card-shadow="elevated"] .panel {
+  box-shadow: 0 18px 45px rgba(24, 33, 29, 0.16);
+}
+html[data-spacing="compact"] .panel {
+  padding: 18px;
+}
+html[data-spacing="spacious"] .panel {
+  padding: 38px;
+}
+html[data-graph-text-size="small"] .axis-label {
+  font-size: 10px;
+}
+html[data-graph-text-size="large"] .axis-label {
+  font-size: 16px;
+}
+html[data-reduce-animation="true"] *,
+html[data-reduce-animation="true"] *::before,
+html[data-reduce-animation="true"] *::after {
+  animation: none !important;
+  transition: none !important;
 }
 .trend-chart path {
   fill: none;
@@ -2066,6 +2157,10 @@ dialog::backdrop {
   .projection-chart,
   .trend-chart {
     min-height: 0;
+  }
+  .chart-scroll svg,
+  .trend-chart-frame svg {
+    min-width: 900px;
   }
   .chart-values,
   .chart-legend {

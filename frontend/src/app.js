@@ -94,6 +94,13 @@ const defaultWebsiteColors = {
   positiveColor: "#185b45",
   negativeColor: "#a33b32",
   chartAccentColor: "#16211d",
+  spacing: "comfortable",
+  fontSize: "standard",
+  headingStyle: "classic",
+  cardCorners: "rounded",
+  cardShadow: "subtle",
+  graphTextSize: "standard",
+  reduceAnimation: false,
 };
 const themePresets = {
   classic: defaultWebsiteColors,
@@ -192,14 +199,29 @@ function applyWebsiteColors(colors) {
   root.setProperty("--positive", value.positiveColor);
   root.setProperty("--danger", value.negativeColor);
   root.setProperty("--chart-accent", value.chartAccentColor);
+  document.documentElement.dataset.spacing = value.spacing ?? "comfortable";
+  document.documentElement.dataset.fontSize = value.fontSize ?? "standard";
+  document.documentElement.dataset.headingStyle =
+    value.headingStyle ?? "classic";
+  document.documentElement.dataset.cardCorners = value.cardCorners ?? "rounded";
+  document.documentElement.dataset.cardShadow = value.cardShadow ?? "subtle";
+  document.documentElement.dataset.graphTextSize =
+    value.graphTextSize ?? "standard";
+  document.documentElement.dataset.reduceAnimation = value.reduceAnimation
+    ? "true"
+    : "false";
   const form = $("#website-colors-form");
   if (form)
-    for (const [name, color] of Object.entries(value))
-      if (form.elements[name]) form.elements[name].value = color;
+    for (const [name, setting] of Object.entries(value))
+      if (form.elements[name]) {
+        if (form.elements[name].type === "checkbox")
+          form.elements[name].checked = Boolean(setting);
+        else form.elements[name].value = setting;
+      }
   const preset = Object.entries(themePresets).find(([, candidate]) =>
-    Object.keys(defaultWebsiteColors).every(
-      (key) => candidate[key] === value[key],
-    ),
+    Object.keys(defaultWebsiteColors)
+      .filter((key) => key.endsWith("Color"))
+      .every((key) => candidate[key] === value[key]),
   );
   if ($("#default-theme")) $("#default-theme").value = preset?.[0] ?? "custom";
 }
@@ -526,13 +548,21 @@ function refreshSelects() {
   $$('select[name="accountId"]').forEach((element) => {
     element.innerHTML = optionList(state.accounts);
   });
-  for (const name of ["fromAccountId", "toAccountId"]) {
+  for (const name of ["fromAccountId", "toAccountId", "linkedAccountId"]) {
     const select = $(`select[name="${name}"]`);
     if (select)
       select.innerHTML =
         '<option value="">Choose an account</option>' +
         optionList(state.accounts);
   }
+  const projectionCategory = $(
+    'select[name="categoryId"]',
+    $("#projection-rule-form"),
+  );
+  if (projectionCategory)
+    projectionCategory.innerHTML =
+      '<option value="">Choose a category</option>' +
+      optionList(state.categories);
   $("#bulk-account").innerHTML =
     '<option value="">No change</option>' + optionList(state.accounts);
   $("#bulk-category").innerHTML =
@@ -555,6 +585,7 @@ async function loadLookups() {
   if (state.workspaceRole !== "viewer") {
     requests.push(api("/api/v1/category-rules"));
     requests.push(api("/api/v1/transaction-vendors"));
+    requests.push(api("/api/v1/projection-rules"));
   }
   const [
     categories,
@@ -562,12 +593,14 @@ async function loadLookups() {
     masterCategories,
     categoryRules = { data: [] },
     vendors = { data: [] },
+    projectionRules = { data: [] },
   ] = await Promise.all(requests);
   state.categories = categories.data;
   state.accounts = accounts.data;
   state.masterCategories = masterCategories.data;
   state.categoryRules = categoryRules.data;
   state.vendors = vendors.data;
+  state.projectionRules = projectionRules.data;
   refreshSelects();
   $("#categories-list").innerHTML = state.categories
     .filter((item) => item.active)
@@ -578,10 +611,15 @@ async function loadLookups() {
     .join("");
   $("#accounts-list").innerHTML = state.accounts
     .filter((item) => item.active)
-    .map(
-      (item) =>
-        `<li><span><strong>${escapeHtml(item.name)}</strong> <small>(${escapeHtml(item.accountType)}, ${escapeHtml(item.liquidityClass ?? "liquid")}${state.separatePersonalBusiness ? `, ${escapeHtml(item.budgetScope ?? "personal")}` : ""})</small><br><small>Interest ${Number(item.annualInterestBps ?? 0) / 100}% · Payment ${money.format(dollars(item.paymentAmountMinor))} ${escapeHtml(item.paymentFrequency ?? "none")}</small></span><span>${iconButton("edit", "Edit account", "edit-account", `data-id="${escapeHtml(item.id)}"`)} ${iconButton("trash", "Archive account", "archive", `data-kind="accounts" data-id="${escapeHtml(item.id)}"`)}</span></li>`,
-    )
+    .map((item) => {
+      const linked = state.projectionRules.filter(
+        (rule) =>
+          rule.linkedAccountId === item.id ||
+          rule.fromAccountId === item.id ||
+          rule.toAccountId === item.id,
+      );
+      return `<li class="account-settings-row"><span><strong>${escapeHtml(item.name)}</strong> <small>(${escapeHtml(item.accountModel ?? "cash")}, ${escapeHtml(item.liquidityClass ?? "liquid")}${state.separatePersonalBusiness ? `, ${escapeHtml(item.budgetScope ?? "personal")}` : ""})</small><div class="account-linked-rules">${linked.length ? linked.map((rule) => `<button type="button" class="linked-rule-chip edit-projection-rule" data-id="${escapeHtml(rule.id)}">${escapeHtml(rule.description)} · ${escapeHtml(rule.ruleType.replaceAll("_", " "))}</button>`).join("") : "<small>No linked Projection Rules.</small>"}</div></span><span><button type="button" class="secondary add-account-rule" data-account-id="${escapeHtml(item.id)}" data-account-model="${escapeHtml(item.accountModel ?? "cash")}">Add linked rule</button> ${iconButton("edit", "Edit account", "edit-account", `data-id="${escapeHtml(item.id)}"`)} ${iconButton("trash", "Archive account", "archive", `data-kind="accounts" data-id="${escapeHtml(item.id)}"`)}</span></li>`;
+    })
     .join("");
   $("#master-categories-list").innerHTML = state.masterCategories
     .filter((item) => item.active)
@@ -643,8 +681,14 @@ async function loadArchivedItems() {
         `<li><span>${escapeHtml(item.name)}</span><span><button class="secondary restore-archived" data-archived-kind="master" data-id="${escapeHtml(item.id)}">Restore</button>${iconButton("trash", "Permanently delete master category", "delete-archived", `data-archived-kind="master" data-id="${escapeHtml(item.id)}"`)}</span></li>`,
     )
     .join("");
+  const budgetRows = (data.budgetSnapshots ?? [])
+    .map(
+      (item) =>
+        `<li><span><strong>${escapeHtml(item.name || "Budget snapshot")}</strong> <small>${escapeHtml(item.effectiveDate)} · revision ${item.revision}</small></span><span><button class="secondary restore-archived-budget" data-id="${escapeHtml(item.id)}">Restore</button>${iconButton("trash", "Permanently delete budget snapshot", "delete-archived-budget", `data-id="${escapeHtml(item.id)}"`)}</span></li>`,
+    )
+    .join("");
   $("#archived-items-list").innerHTML =
-    `<h3>Categories</h3><ul class="settings-list">${categoryRows || "<li>No archived categories.</li>"}</ul><h3>Master categories</h3><ul class="settings-list">${masterRows || "<li>No archived master categories.</li>"}</ul>`;
+    `<h3>Budget snapshots</h3><ul class="settings-list">${budgetRows || "<li>No archived budget snapshots.</li>"}</ul><h3>Categories</h3><ul class="settings-list">${categoryRows || "<li>No archived categories.</li>"}</ul><h3>Master categories</h3><ul class="settings-list">${masterRows || "<li>No archived master categories.</li>"}</ul>`;
 }
 async function loadTransactions() {
   const params = new URLSearchParams({
@@ -811,7 +855,7 @@ function renderCategoryRanking() {
     ? `${master.name} categories`
     : selected === "unassigned"
       ? "Unassigned categories"
-      : "All categories";
+      : "Master categories";
   $("#clear-master-filter").hidden = selected === null;
   const max = Math.max(1, ...rows.map((row) => Math.abs(row.amount_minor)));
   $("#category-ranked-bars").innerHTML = rows.length
@@ -863,7 +907,7 @@ function renderCategoryRanking() {
     $("#category-ranked-bars").innerHTML = [...groups.values()]
       .map(
         (group) =>
-          `<section class="activity-master-group"><h3>${escapeHtml(group.name)}${state.separatePersonalBusiness ? ` <small>· ${group.scope === "business" ? "Business" : "Personal"}</small>` : ""}</h3><div class="activity-master-totals"><span>Actual ${money.format(dollars(group.actual))}</span><span>Budget ${money.format(dollars(group.budget))}</span><strong>${group.budget >= group.actual ? "Left" : "Over"} ${money.format(dollars(Math.abs(group.budget - group.actual)))}</strong></div>${group.html.join("")}</section>`,
+          `<details class="activity-master-group" ${selected !== null ? "open" : ""}><summary><div><h3>${escapeHtml(group.name)}${state.separatePersonalBusiness ? ` <small>· ${group.scope === "business" ? "Business" : "Personal"}</small>` : ""}</h3><div class="activity-master-totals"><span>Actual ${money.format(dollars(group.actual))}</span><span>Budget ${money.format(dollars(group.budget))}</span><strong>${group.budget >= group.actual ? "Left" : "Over"} ${money.format(dollars(Math.abs(group.budget - group.actual)))}</strong></div></div><span class="master-expand-indicator" aria-hidden="true">⌄</span></summary><div class="activity-master-categories">${group.html.join("")}</div></details>`,
       )
       .join("");
   }
@@ -1413,7 +1457,7 @@ function renderBudgetHistory() {
             snapshot.items
               .filter((i) => i.kind === kind)
               .reduce((sum, i) => sum + i.monthlyBudgetMinor, 0);
-          return `<details class="budget-history-entry"><summary><strong>${escapeHtml(snapshot.name || "Budget snapshot")}</strong><span>${snapshot.effectiveDate === "0001-01-01" ? "Baseline" : escapeHtml(snapshot.effectiveDate)} · revision ${snapshot.revision}${revision ? " · superseded" : next ? ` · until ${new Date(Date.parse(next.effectiveDate + "T00:00:00Z") - 86400000).toISOString().slice(0, 10)}` : " · ongoing"}</span></summary><p>Monthly expenses ${money.format(dollars(totals("expense")))} · income ${money.format(dollars(totals("income")))}</p><button type="button" class="secondary" data-copy-budget="${escapeHtml(snapshot.id)}">Use as starting point</button><div class="history-items">${snapshot.items
+          return `<details class="budget-history-entry"><summary><strong>${escapeHtml(snapshot.name || "Budget snapshot")}</strong><span>${snapshot.effectiveDate === "0001-01-01" ? "Baseline" : escapeHtml(snapshot.effectiveDate)} · revision ${snapshot.revision}${revision ? " · superseded" : next ? ` · until ${new Date(Date.parse(next.effectiveDate + "T00:00:00Z") - 86400000).toISOString().slice(0, 10)}` : " · ongoing"}</span></summary><p>Monthly expenses ${money.format(dollars(totals("expense")))} · income ${money.format(dollars(totals("income")))}</p><div class="history-actions"><button type="button" class="secondary edit-budget-snapshot" data-id="${escapeHtml(snapshot.id)}">Edit</button><button type="button" class="secondary" data-copy-budget="${escapeHtml(snapshot.id)}">Use as starting point</button><button type="button" class="secondary danger archive-budget-snapshot" data-id="${escapeHtml(snapshot.id)}">Archive</button></div><div class="history-items">${snapshot.items
             .map((item) => {
               const before = previous?.items.find(
                 (i) => i.categoryId === item.categoryId,
@@ -1573,7 +1617,9 @@ function renderNetWorthRelatedLists() {
   const selected = state.selectedNetWorthAccounts;
   const rules = state.projectionRules.filter(
     (item) =>
-      selected.has(item.fromAccountId) || selected.has(item.toAccountId),
+      selected.has(item.fromAccountId) ||
+      selected.has(item.toAccountId) ||
+      selected.has(item.linkedAccountId),
   );
   $("#projection-rules-list").innerHTML = rules.length
     ? rules
@@ -1583,12 +1629,19 @@ function renderNetWorthRelatedLists() {
               ? `Into ${item.toAccountName}`
               : item.ruleType === "expense"
                 ? `From ${item.fromAccountName}`
-                : `${item.fromAccountName} → ${item.toAccountName}`;
+                : item.linkedAccountName
+                  ? `Linked to ${item.linkedAccountName}${item.fromAccountName ? ` · paid from ${item.fromAccountName}` : ""}${item.toAccountName ? ` · into ${item.toAccountName}` : ""}`
+                  : `${item.fromAccountName} → ${item.toAccountName}`;
           const schedule =
             item.frequency === "once"
               ? `once on ${item.startDate}`
               : `${item.frequency} from ${item.startDate}`;
-          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType)} · ${escapeHtml(schedule)} · ${escapeHtml(route)}</span></div><div><strong>${money.format(dollars(item.amountMinor))}</strong><button class="secondary edit-projection-rule" data-id="${escapeHtml(item.id)}">Edit</button><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
+          const measure = ["asset_growth", "yield", "debt_interest"].includes(
+            item.ruleType,
+          )
+            ? `${Number(item.annualRateBps ?? 0) / 100}% annual`
+            : money.format(dollars(item.amountMinor));
+          return `<article class="projection-rule"><div><strong>${escapeHtml(item.description)}</strong><span>${escapeHtml(item.ruleType.replaceAll("_", " "))} · ${escapeHtml(schedule)} · ${escapeHtml(route)}</span></div><div><strong>${escapeHtml(measure)}</strong><button class="secondary edit-projection-rule" data-id="${escapeHtml(item.id)}">Edit</button><button class="secondary danger delete-projection-rule" data-id="${escapeHtml(item.id)}">Delete</button></div></article>`;
         })
         .join("")
     : '<div class="empty">No projection rules affect the selected accounts.</div>';
@@ -1974,18 +2027,81 @@ function updateProjectionRuleFields() {
     type = form.elements.ruleType.value,
     fromField = $("#projection-from-field"),
     toField = $("#projection-to-field");
-  fromField.hidden = type === "income";
-  toField.hidden = type === "expense";
-  form.elements.fromAccountId.required = type !== "income";
-  form.elements.toAccountId.required = type !== "expense";
-  if (type === "income") form.elements.fromAccountId.value = "";
-  if (type === "expense") form.elements.toAccountId.value = "";
+  const linkedTypes = [
+    "asset_growth",
+    "yield",
+    "debt_payment",
+    "debt_interest",
+  ];
+  const needsFrom = [
+    "expense",
+    "transfer",
+    "debt_payment",
+    "extra_principal",
+  ].includes(type);
+  const needsTo =
+    ["income", "transfer", "extra_principal"].includes(type) ||
+    type === "yield";
+  const needsLinked = linkedTypes.includes(type);
+  fromField.hidden = !needsFrom;
+  toField.hidden = !needsTo;
+  $("#projection-linked-field").hidden = !needsLinked;
+  $("#projection-category-field").hidden = ![
+    "yield",
+    "debt_payment",
+    "debt_interest",
+  ].includes(type);
+  $("#projection-rate-field").hidden = ![
+    "asset_growth",
+    "yield",
+    "debt_payment",
+    "debt_interest",
+  ].includes(type);
+  $("#projection-rate-label").textContent = [
+    "debt_payment",
+    "debt_interest",
+  ].includes(type)
+    ? "Annual interest rate (%)"
+    : type === "yield"
+      ? "Annual interest / dividend yield (%)"
+      : "Annual growth rate (%)";
+  $("#projection-compounding-field").hidden = ![
+    "asset_growth",
+    "yield",
+    "debt_interest",
+  ].includes(type);
+  $("#projection-treatment-field").hidden = type !== "yield";
+  for (const id of [
+    "projection-amortization-field",
+    "projection-term-field",
+    "projection-renewal-date-field",
+    "projection-renewal-rate-field",
+  ])
+    $("#" + id).hidden = type !== "debt_payment";
+  form.elements.fromAccountId.required = needsFrom;
+  form.elements.toAccountId.required =
+    needsTo &&
+    !(type === "yield" && form.elements.treatment.value !== "deposit");
+  form.elements.linkedAccountId.required = needsLinked;
+  form.elements.amount.required = ![
+    "asset_growth",
+    "yield",
+    "debt_interest",
+  ].includes(type);
   $("#projection-rule-help").textContent =
-    type === "income"
-      ? "Income increases the selected destination account."
-      : type === "expense"
-        ? "The expense reduces the selected source account; choosing a credit card increases the debt owed."
-        : "A transfer reduces the source and increases the destination. Use this for savings, debt payments, or moving money between accounts.";
+    type === "debt_payment"
+      ? "The full payment leaves the source account; interest is expensed and only principal reduces the linked debt."
+      : type === "yield"
+        ? "Interest or dividends can be deposited into another account or reinvested in the linked account."
+        : type === "asset_growth"
+          ? "The annualized rate changes the linked account value at the selected interval."
+          : type === "debt_interest"
+            ? "Accrued interest increases the linked debt balance."
+            : type === "income"
+              ? "Income increases the selected destination account."
+              : type === "expense"
+                ? "The expense reduces the selected source account."
+                : "A transfer reduces the source and increases the destination.";
 }
 function renderImportPreview() {
   const [headers, ...rows] = state.csv.rows;
@@ -2134,6 +2250,16 @@ document.addEventListener("click", (event) => {
   }
   const target = event.target.closest("button");
   if (!target) return;
+  if (target.dataset.settingsTab) {
+    const tab = target.dataset.settingsTab;
+    $$("[data-settings-tab]").forEach((button) =>
+      button.classList.toggle("secondary", button !== target),
+    );
+    $$("[data-settings-section]").forEach(
+      (section) => (section.hidden = section.dataset.settingsSection !== tab),
+    );
+    return;
+  }
   if (target.dataset.resolutionStep) {
     const levels = ["yearly", "quarterly", "monthly", "weekly", "daily"];
     const next = Math.max(
@@ -2177,6 +2303,62 @@ document.addEventListener("click", (event) => {
       notify(
         "Copied into the editor. Choose an effective date and save a new snapshot.",
       );
+    });
+    return;
+  }
+  if (target.classList.contains("edit-budget-snapshot")) {
+    const snapshot = state.budgetHistory.find(
+      (item) => item.id === target.dataset.id,
+    );
+    if (snapshot) {
+      $("#budget-effective-date").value = snapshot.effectiveDate;
+      $("#budget-snapshot-name").value = snapshot.name;
+      renderBudgetEditor(snapshot.items, selectedScope("#budget-scope-filter"));
+      $("#budget-form").scrollIntoView({ behavior: "smooth", block: "start" });
+      notify(
+        "Editing creates a corrected revision; the earlier revision remains in history.",
+      );
+    }
+    return;
+  }
+  if (
+    target.classList.contains("archive-budget-snapshot") &&
+    confirm(
+      "Archive this snapshot? Its preceding active snapshot will apply until the next active snapshot, which may change historical reports.",
+    )
+  ) {
+    void run(async () => {
+      await api(`/api/v1/budget-history/${target.dataset.id}`, {
+        method: "DELETE",
+      });
+      await loadBudget();
+      await loadArchivedItems();
+      notify("Budget snapshot moved to Archived items.");
+    });
+    return;
+  }
+  if (target.classList.contains("restore-archived-budget")) {
+    void run(async () => {
+      await api(`/api/v1/archived-items/budget/${target.dataset.id}`, {
+        method: "POST",
+      });
+      await Promise.all([loadArchivedItems(), loadBudget()]);
+      notify("Budget snapshot restored.");
+    });
+    return;
+  }
+  if (
+    target.classList.contains("delete-archived-budget") &&
+    confirm(
+      "Permanently delete this archived budget snapshot and its item history? This cannot be undone.",
+    )
+  ) {
+    void run(async () => {
+      await api(`/api/v1/archived-items/budget/${target.dataset.id}`, {
+        method: "DELETE",
+      });
+      await loadArchivedItems();
+      notify("Archived budget snapshot permanently deleted.");
     });
     return;
   }
@@ -2384,6 +2566,7 @@ document.addEventListener("click", (event) => {
     if (target.dataset.dialog === "account-dialog") {
       $("#account-form").reset();
       $("#account-form").elements.id.value = "";
+      $("#account-form").elements.accountModel.value = "credit_card";
       $("#account-title").textContent = "Add account";
     }
     if (target.dataset.dialog === "projection-rule-dialog") {
@@ -2425,17 +2608,34 @@ document.addEventListener("click", (event) => {
     form.elements.id.value = item.id;
     form.elements.name.value = item.name;
     form.elements.accountType.value = item.accountType;
+    form.elements.accountModel.value = item.accountModel ?? "cash";
     form.elements.liquidityClass.value = item.liquidityClass ?? "liquid";
     form.elements.budgetScope.value = item.budgetScope ?? "personal";
-    form.elements.annualInterest.value =
-      Number(item.annualInterestBps ?? 0) / 100;
-    form.elements.paymentAmount.value = dollars(item.paymentAmountMinor);
-    form.elements.paymentFrequency.value = item.paymentFrequency ?? "none";
-    form.elements.annualEquityGain.value = dollars(item.annualEquityGainMinor);
-    form.elements.annualDividend.value = dollars(item.annualDividendMinor);
     form.elements.projectionNotes.value = item.projectionNotes ?? "";
     $("#account-title").textContent = "Edit account";
     $("#account-dialog").showModal();
+  }
+  if (target.classList.contains("add-account-rule")) {
+    const form = $("#projection-rule-form"),
+      model = target.dataset.accountModel;
+    form.reset();
+    form.elements.id.value = "";
+    form.elements.startDate.value = tomorrow();
+    form.elements.linkedAccountId.value = target.dataset.accountId;
+    form.elements.ruleType.value =
+      model === "mortgage" || model === "loan"
+        ? "debt_payment"
+        : model === "credit_card"
+          ? "debt_interest"
+          : model === "savings"
+            ? "yield"
+            : "asset_growth";
+    form.elements.description.value = `${state.accounts.find((item) => item.id === target.dataset.accountId)?.name ?? "Account"} projection`;
+    $("#projection-rule-title").textContent = "Add linked Projection Rule";
+    updateProjectionRuleFields();
+    form.elements.linkedAccountId.value = target.dataset.accountId;
+    $("#projection-rule-dialog").showModal();
+    return;
   }
   if (target.classList.contains("edit-projection-rule")) {
     const rule = state.projectionRules?.find(
@@ -2453,6 +2653,17 @@ document.addEventListener("click", (event) => {
       updateProjectionRuleFields();
       form.elements.fromAccountId.value = rule.fromAccountId ?? "";
       form.elements.toAccountId.value = rule.toAccountId ?? "";
+      form.elements.linkedAccountId.value = rule.linkedAccountId ?? "";
+      form.elements.categoryId.value = rule.categoryId ?? "";
+      form.elements.annualRate.value = Number(rule.annualRateBps ?? 0) / 100;
+      form.elements.compoundingInterval.value =
+        rule.compoundingInterval ?? "monthly";
+      form.elements.treatment.value = rule.treatment ?? "deposit";
+      form.elements.amortizationMonths.value = rule.amortizationMonths ?? "";
+      form.elements.termMonths.value = rule.termMonths ?? "";
+      form.elements.renewalDate.value = rule.renewalDate ?? "";
+      form.elements.renewalRate.value =
+        rule.renewalRateBps == null ? "" : Number(rule.renewalRateBps) / 100;
       $("#projection-rule-title").textContent = "Edit Projection Rule";
       $("#projection-rule-dialog").showModal();
     }
@@ -2540,7 +2751,7 @@ document.addEventListener("click", (event) => {
         method: "DELETE",
       });
       notify("Projection rule deleted.");
-      await loadNetWorth();
+      await Promise.all([loadNetWorth(), loadLookups()]);
     });
 });
 
@@ -2573,6 +2784,20 @@ document.addEventListener("change", (event) => {
   }
   if (event.target.id === "budget-scope-filter") {
     void run(loadBudget);
+    return;
+  }
+  if (event.target.matches("#account-form [name='accountType']")) {
+    const model = $("#account-form").elements.accountModel;
+    const suggested = {
+      cash: "cash",
+      chequing: "cash",
+      savings: "savings",
+      investment: "investment",
+      credit_card: "credit_card",
+      asset: "property",
+      liability: "loan",
+    }[event.target.value];
+    if (suggested) model.value = suggested;
     return;
   }
   if (event.target.id === "networth-scope-filter") {
@@ -2628,7 +2853,15 @@ document.addEventListener("change", (event) => {
     });
     return;
   }
-  if (event.target.matches("#projection-rule-form [name='ruleType']")) {
+  if (
+    event.target.matches(
+      "#projection-rule-form [name='ruleType'], #projection-rule-form [name='treatment'], #projection-rule-form [name='compoundingInterval']",
+    )
+  ) {
+    if (event.target.name === "compoundingInterval") {
+      const form = $("#projection-rule-form");
+      form.elements.frequency.value = event.target.value;
+    }
     updateProjectionRuleFields();
     return;
   }
@@ -2745,26 +2978,48 @@ $("#projection-rule-form").addEventListener("submit", (event) => {
   void run(async () => {
     const form = new FormData(formElement);
     const id = form.get("id");
+    const ruleType = String(form.get("ruleType"));
+    const computedRule = ["asset_growth", "yield", "debt_interest"].includes(
+      ruleType,
+    );
     await api(
       id ? `/api/v1/projection-rules/${id}` : "/api/v1/projection-rules",
       {
         method: id ? "PUT" : "POST",
         body: JSON.stringify({
           description: form.get("description"),
-          ruleType: form.get("ruleType"),
+          ruleType,
           amountMinor: cents(form.get("amount")),
-          frequency: form.get("frequency"),
+          frequency: computedRule
+            ? form.get("compoundingInterval")
+            : form.get("frequency"),
           startDate: form.get("startDate"),
           endDate: form.get("endDate") || null,
           fromAccountId: form.get("fromAccountId") || null,
           toAccountId: form.get("toAccountId") || null,
+          linkedAccountId: form.get("linkedAccountId") || null,
+          categoryId: form.get("categoryId") || null,
+          annualRateBps: Math.round(Number(form.get("annualRate") || 0) * 100),
+          compoundingInterval: form.get("compoundingInterval") || "monthly",
+          treatment: form.get("treatment") || "deposit",
+          amortizationMonths: form.get("amortizationMonths")
+            ? Number(form.get("amortizationMonths"))
+            : null,
+          termMonths: form.get("termMonths")
+            ? Number(form.get("termMonths"))
+            : null,
+          renewalDate: form.get("renewalDate") || null,
+          renewalRateBps:
+            form.get("renewalRate") === ""
+              ? null
+              : Math.round(Number(form.get("renewalRate")) * 100),
         }),
       },
     );
     $("#projection-rule-dialog").close();
     formElement.reset();
     notify(id ? "Projection rule updated." : "Projection rule added.");
-    await loadNetWorth();
+    await Promise.all([loadNetWorth(), loadLookups()]);
   });
 });
 $("#category-form").addEventListener("submit", (event) => {
@@ -2833,7 +3088,23 @@ $("#website-colors-form").addEventListener("submit", (event) => {
 });
 $("#default-theme").addEventListener("change", (event) => {
   const preset = themePresets[event.target.value];
-  if (preset) applyWebsiteColors(preset);
+  if (preset) {
+    const formatting = Object.fromEntries(
+      [
+        "spacing",
+        "fontSize",
+        "headingStyle",
+        "cardCorners",
+        "cardShadow",
+        "graphTextSize",
+        "reduceAnimation",
+      ].map((key) => [
+        key,
+        state.websiteColors?.[key] ?? defaultWebsiteColors[key],
+      ]),
+    );
+    applyWebsiteColors({ ...preset, ...formatting });
+  }
 });
 $("#account-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -2844,14 +3115,15 @@ $("#account-form").addEventListener("submit", (event) => {
     const body = {
       name: form.get("name"),
       accountType: form.get("accountType"),
+      accountModel: form.get("accountModel"),
       liquidityClass: form.get("liquidityClass"),
       budgetScope: form.get("budgetScope") || "personal",
       annualGrowthBps: 0,
-      paymentAmountMinor: cents(form.get("paymentAmount")),
-      paymentFrequency: form.get("paymentFrequency"),
-      annualInterestBps: Math.round(Number(form.get("annualInterest")) * 100),
-      annualEquityGainMinor: cents(form.get("annualEquityGain")),
-      annualDividendMinor: cents(form.get("annualDividend")),
+      paymentAmountMinor: 0,
+      paymentFrequency: "none",
+      annualInterestBps: 0,
+      annualEquityGainMinor: 0,
+      annualDividendMinor: 0,
       annualDepreciationBps: 0,
       projectionNotes: form.get("projectionNotes"),
     };
@@ -3436,8 +3708,8 @@ $("#transaction-start-date").value = monthStart();
 $("#transaction-end-date").value = today();
 $("#summary-start-date").value = yearStart();
 $("#summary-end-date").value = today();
-$("#networth-start-date").value = shiftYears(today(), -2);
-$("#networth-end-date").value = shiftYears(today(), 5);
+$("#networth-start-date").value = shiftYears(today(), -1);
+$("#networth-end-date").value = shiftYears(today(), 3);
 $("#balance-form").snapshotDate.value = today();
 try {
   const session = await api("/api/v1/auth/me");

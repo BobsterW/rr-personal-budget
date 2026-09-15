@@ -41,8 +41,21 @@ export interface ProjectionAssumptions {
 
 export type PaymentFrequency = "none" | "monthly" | "yearly";
 export type LiquidityClass = "fixed" | "liquid";
-export type ProjectionRuleType = "income" | "expense" | "transfer";
-export type ProjectionRuleFrequency = "monthly" | "yearly" | "once";
+export type ProjectionRuleType =
+  | "income"
+  | "expense"
+  | "transfer"
+  | "asset_growth"
+  | "yield"
+  | "debt_payment"
+  | "debt_interest"
+  | "extra_principal";
+export type ProjectionRuleFrequency =
+  | "monthly"
+  | "yearly"
+  | "once"
+  | "weekly"
+  | "biweekly";
 
 export interface ProjectionRule {
   id: string;
@@ -54,6 +67,15 @@ export interface ProjectionRule {
   endDate: string | null;
   fromAccountId: string | null;
   toAccountId: string | null;
+  linkedAccountId?: string | null;
+  categoryId?: string | null;
+  annualRateBps?: number;
+  compoundingInterval?: "monthly" | "yearly";
+  treatment?: "deposit" | "reinvest" | "included_in_growth";
+  amortizationMonths?: number | null;
+  termMonths?: number | null;
+  renewalDate?: string | null;
+  renewalRateBps?: number | null;
 }
 
 export interface AccountProjectionInput {

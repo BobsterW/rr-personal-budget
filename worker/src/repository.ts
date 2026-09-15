@@ -136,13 +136,14 @@ export class BudgetRepository {
     else
       await this.db
         .prepare(
-          "INSERT INTO accounts (id,user_id,name,account_type,liquidity_class,budget_scope,annual_growth_bps,payment_amount_minor,payment_frequency,annual_interest_bps,annual_equity_gain_minor,annual_dividend_minor,annual_depreciation_bps,projection_notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO accounts (id,user_id,name,account_type,account_model,liquidity_class,budget_scope,annual_growth_bps,payment_amount_minor,payment_frequency,annual_interest_bps,annual_equity_gain_minor,annual_dividend_minor,annual_depreciation_bps,projection_notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(
           id,
           this.userId,
           input.name,
           input.accountType,
+          input.accountModel ?? "cash",
           input.liquidityClass ?? "liquid",
           input.budgetScope ?? "personal",
           input.annualGrowthBps ?? 0,
@@ -220,10 +221,16 @@ export class BudgetRepository {
   }
 
   async listArchivedItems() {
-    const [categories, masters] = await Promise.all([
+    const [categories, budgets, masters] = await Promise.all([
       this.db
         .prepare(
           "SELECT id,name,kind,updated_at FROM categories WHERE user_id=? AND active=0 ORDER BY name",
+        )
+        .bind(this.userId)
+        .all(),
+      this.db
+        .prepare(
+          "SELECT id,effective_date,name,revision,archived_at FROM budget_snapshots WHERE user_id=? AND active=0 ORDER BY effective_date DESC,revision DESC",
         )
         .bind(this.userId)
         .all(),
@@ -237,6 +244,7 @@ export class BudgetRepository {
     return {
       categories: categories.results,
       masterCategories: masters.results,
+      budgetSnapshots: budgets.results,
     };
   }
 
@@ -249,6 +257,36 @@ export class BudgetRepository {
       .bind(new Date().toISOString(), id, this.userId)
       .run();
     return result.meta.changes > 0;
+  }
+
+  async archiveBudgetSnapshot(id: string) {
+    const result = await this.db
+      .prepare(
+        "UPDATE budget_snapshots SET active=0,archived_at=? WHERE id=? AND user_id=? AND active=1",
+      )
+      .bind(new Date().toISOString(), id, this.userId)
+      .run();
+    return Number(result.meta.changes ?? 0) > 0;
+  }
+
+  async restoreBudgetSnapshot(id: string) {
+    const result = await this.db
+      .prepare(
+        "UPDATE budget_snapshots SET active=1,archived_at=NULL WHERE id=? AND user_id=? AND active=0",
+      )
+      .bind(id, this.userId)
+      .run();
+    return Number(result.meta.changes ?? 0) > 0;
+  }
+
+  async permanentlyDeleteBudgetSnapshot(id: string) {
+    const result = await this.db
+      .prepare(
+        "DELETE FROM budget_snapshots WHERE id=? AND user_id=? AND active=0",
+      )
+      .bind(id, this.userId)
+      .run();
+    return Number(result.meta.changes ?? 0) > 0;
   }
 
   async permanentlyDeleteCategory(id: string, replacementId: string) {
@@ -279,6 +317,11 @@ export class BudgetRepository {
       this.db
         .prepare(
           "UPDATE category_rules SET category_id=?,updated_at=? WHERE user_id=? AND category_id=?",
+        )
+        .bind(replacementId, now, this.userId, id),
+      this.db
+        .prepare(
+          "UPDATE projection_rules SET category_id=?,updated_at=? WHERE user_id=? AND category_id=?",
         )
         .bind(replacementId, now, this.userId, id),
       this.db
@@ -533,20 +576,14 @@ export class BudgetRepository {
   async updateAccount(id: string, input: Record<string, unknown>) {
     const result = await this.db
       .prepare(
-        "UPDATE accounts SET name=?,account_type=?,liquidity_class=?,budget_scope=?,annual_growth_bps=?,payment_amount_minor=?,payment_frequency=?,annual_interest_bps=?,annual_equity_gain_minor=?,annual_dividend_minor=?,annual_depreciation_bps=?,projection_notes=?,updated_at=? WHERE id=? AND user_id=?",
+        "UPDATE accounts SET name=?,account_type=?,account_model=?,liquidity_class=?,budget_scope=?,annual_growth_bps=0,payment_amount_minor=0,payment_frequency='none',annual_interest_bps=0,annual_equity_gain_minor=0,annual_dividend_minor=0,annual_depreciation_bps=0,projection_notes=?,updated_at=? WHERE id=? AND user_id=?",
       )
       .bind(
         input.name,
         input.accountType,
+        input.accountModel,
         input.liquidityClass,
         input.budgetScope,
-        input.annualGrowthBps,
-        input.paymentAmountMinor,
-        input.paymentFrequency,
-        input.annualInterestBps,
-        input.annualEquityGainMinor,
-        input.annualDividendMinor,
-        input.annualDepreciationBps,
         input.projectionNotes,
         new Date().toISOString(),
         id,
@@ -584,12 +621,20 @@ export class BudgetRepository {
         .all(),
       this.db
         .prepare(
-          `SELECT r.* FROM projection_rules r WHERE r.user_id=? AND r.active=1${scope === "both" ? "" : " AND (r.from_account_id IN (SELECT id FROM accounts WHERE user_id=? AND budget_scope=?) OR r.to_account_id IN (SELECT id FROM accounts WHERE user_id=? AND budget_scope=?))"} ORDER BY r.start_date,r.description`,
+          `SELECT r.* FROM projection_rules r WHERE r.user_id=? AND r.active=1${scope === "both" ? "" : " AND (r.from_account_id IN (SELECT id FROM accounts WHERE user_id=? AND budget_scope=?) OR r.to_account_id IN (SELECT id FROM accounts WHERE user_id=? AND budget_scope=?) OR r.linked_account_id IN (SELECT id FROM accounts WHERE user_id=? AND budget_scope=?))"} ORDER BY r.start_date,r.description`,
         )
         .bind(
           ...(scope === "both"
             ? [this.userId]
-            : [this.userId, this.userId, scope, this.userId, scope]),
+            : [
+                this.userId,
+                this.userId,
+                scope,
+                this.userId,
+                scope,
+                this.userId,
+                scope,
+              ]),
         )
         .all(),
     ]);
@@ -605,10 +650,12 @@ export class BudgetRepository {
     return (
       await this.db
         .prepare(
-          `SELECT r.*,fa.name from_account_name,ta.name to_account_name FROM projection_rules r LEFT JOIN accounts fa ON fa.id=r.from_account_id AND fa.user_id=r.user_id LEFT JOIN accounts ta ON ta.id=r.to_account_id AND ta.user_id=r.user_id WHERE r.user_id=? AND r.active=1${scope === "both" ? "" : " AND (fa.budget_scope=? OR ta.budget_scope=?)"} ORDER BY r.start_date,r.description`,
+          `SELECT r.*,fa.name from_account_name,ta.name to_account_name,la.name linked_account_name,c.name category_name FROM projection_rules r LEFT JOIN accounts fa ON fa.id=r.from_account_id AND fa.user_id=r.user_id LEFT JOIN accounts ta ON ta.id=r.to_account_id AND ta.user_id=r.user_id LEFT JOIN accounts la ON la.id=r.linked_account_id AND la.user_id=r.user_id LEFT JOIN categories c ON c.id=r.category_id AND c.user_id=r.user_id WHERE r.user_id=? AND r.active=1${scope === "both" ? "" : " AND (fa.budget_scope=? OR ta.budget_scope=? OR la.budget_scope=?)"} ORDER BY r.start_date,r.description`,
         )
         .bind(
-          ...(scope === "both" ? [this.userId] : [this.userId, scope, scope]),
+          ...(scope === "both"
+            ? [this.userId]
+            : [this.userId, scope, scope, scope]),
         )
         .all()
     ).results;
@@ -616,19 +663,28 @@ export class BudgetRepository {
 
   async createProjectionRule(input: {
     description: string;
-    ruleType: "income" | "expense" | "transfer";
+    ruleType: string;
     amountMinor: number;
-    frequency: "monthly" | "yearly" | "once";
+    frequency: string;
     startDate: string;
     endDate: string | null;
     fromAccountId: string | null;
     toAccountId: string | null;
+    linkedAccountId: string | null;
+    categoryId: string | null;
+    annualRateBps: number;
+    compoundingInterval: string;
+    treatment: string;
+    amortizationMonths: number | null;
+    termMonths: number | null;
+    renewalDate: string | null;
+    renewalRateBps: number | null;
   }) {
     const id = crypto.randomUUID(),
       now = new Date().toISOString();
     await this.db
       .prepare(
-        "INSERT INTO projection_rules (id,user_id,description,rule_type,amount_minor,frequency,start_date,end_date,from_account_id,to_account_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO projection_rules (id,user_id,description,rule_type,amount_minor,frequency,start_date,end_date,from_account_id,to_account_id,linked_account_id,category_id,annual_rate_bps,compounding_interval,treatment,amortization_months,term_months,renewal_date,renewal_rate_bps,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .bind(
         id,
@@ -641,6 +697,15 @@ export class BudgetRepository {
         input.endDate,
         input.fromAccountId,
         input.toAccountId,
+        input.linkedAccountId,
+        input.categoryId,
+        input.annualRateBps,
+        input.compoundingInterval,
+        input.treatment,
+        input.amortizationMonths,
+        input.termMonths,
+        input.renewalDate,
+        input.renewalRateBps,
         now,
         now,
       )
@@ -655,18 +720,27 @@ export class BudgetRepository {
     id: string,
     input: {
       description: string;
-      ruleType: "income" | "expense" | "transfer";
+      ruleType: string;
       amountMinor: number;
-      frequency: "monthly" | "yearly" | "once";
+      frequency: string;
       startDate: string;
       endDate: string | null;
       fromAccountId: string | null;
       toAccountId: string | null;
+      linkedAccountId: string | null;
+      categoryId: string | null;
+      annualRateBps: number;
+      compoundingInterval: string;
+      treatment: string;
+      amortizationMonths: number | null;
+      termMonths: number | null;
+      renewalDate: string | null;
+      renewalRateBps: number | null;
     },
   ) {
     const result = await this.db
       .prepare(
-        "UPDATE projection_rules SET description=?,rule_type=?,amount_minor=?,frequency=?,start_date=?,end_date=?,from_account_id=?,to_account_id=?,updated_at=? WHERE id=? AND user_id=? AND active=1",
+        "UPDATE projection_rules SET description=?,rule_type=?,amount_minor=?,frequency=?,start_date=?,end_date=?,from_account_id=?,to_account_id=?,linked_account_id=?,category_id=?,annual_rate_bps=?,compounding_interval=?,treatment=?,amortization_months=?,term_months=?,renewal_date=?,renewal_rate_bps=?,updated_at=? WHERE id=? AND user_id=? AND active=1",
       )
       .bind(
         input.description,
@@ -677,6 +751,15 @@ export class BudgetRepository {
         input.endDate,
         input.fromAccountId,
         input.toAccountId,
+        input.linkedAccountId,
+        input.categoryId,
+        input.annualRateBps,
+        input.compoundingInterval,
+        input.treatment,
+        input.amortizationMonths,
+        input.termMonths,
+        input.renewalDate,
+        input.renewalRateBps,
         new Date().toISOString(),
         id,
         this.userId,
@@ -1170,10 +1253,11 @@ export class BudgetRepository {
       .prepare(
         `SELECT s.id,s.effective_date,s.name snapshot_name,s.revision,s.created_at,
           i.category_id,i.category_name,i.kind,i.master_category_id,
-          i.master_category_name,i.budget_scope,i.monthly_budget_minor
+          i.master_category_name,i.budget_scope,i.monthly_budget_minor,
+          s.active,s.archived_at
         FROM budget_snapshots s
         LEFT JOIN budget_snapshot_items i ON i.snapshot_id=s.id
-        WHERE s.user_id=?
+        WHERE s.user_id=? AND s.active=1
         ORDER BY s.effective_date,s.revision,i.category_name`,
       )
       .bind(this.userId)
@@ -1188,6 +1272,8 @@ export class BudgetRepository {
           name: String(row.snapshot_name),
           revision: Number(row.revision),
           createdAt: String(row.created_at),
+          active: Number(row.active) === 1,
+          archivedAt: row.archived_at ? String(row.archived_at) : null,
           items: [],
         });
       if (row.category_id)

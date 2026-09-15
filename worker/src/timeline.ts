@@ -156,18 +156,40 @@ function scheduledDate(
     .slice(0, 10);
 }
 
-function ruleAmount(rule: ProjectionRule, from: string, to: string) {
-  if (!ruleActiveDuring(rule, from, to)) return 0;
-  if (rule.frequency === "once")
-    return rule.startDate > from && rule.startDate <= to ? rule.amountMinor : 0;
-  let count = 0;
-  for (let occurrence = 0; occurrence < 2_400; occurrence += 1) {
-    const date = scheduledDate(rule.startDate, rule.frequency, occurrence);
-    if (date > to || (rule.endDate && date > rule.endDate)) break;
-    if (date > from) count += 1;
+function ruleOccursOn(rule: ProjectionRule, date: string) {
+  if (date < rule.startDate || (rule.endDate && date > rule.endDate))
+    return false;
+  if (rule.frequency === "once") return date === rule.startDate;
+  const elapsedDays = daysBetween(rule.startDate, date);
+  if (rule.frequency === "weekly") return elapsedDays % 7 === 0;
+  if (rule.frequency === "biweekly") return elapsedDays % 14 === 0;
+  const start = utc(rule.startDate),
+    target = utc(date);
+  if (rule.frequency === "yearly") {
+    const years = target.getUTCFullYear() - start.getUTCFullYear();
+    return (
+      years >= 0 && scheduledDate(rule.startDate, "yearly", years) === date
+    );
   }
-  return rule.amountMinor * count;
+  const months =
+    (target.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    target.getUTCMonth() -
+    start.getUTCMonth();
+  return (
+    months >= 0 && scheduledDate(rule.startDate, "monthly", months) === date
+  );
 }
+
+const periodsPerYear = (frequency: ProjectionRule["frequency"]) =>
+  frequency === "weekly"
+    ? 52
+    : frequency === "biweekly"
+      ? 26
+      : frequency === "monthly"
+        ? 12
+        : 1;
+const periodicRate = (annualBps: number, periods: number) =>
+  Math.pow(1 + annualBps / 10_000, 1 / Math.max(1, periods)) - 1;
 
 function applyProjectionRules(
   balances: Map<string, number>,
@@ -176,7 +198,53 @@ function applyProjectionRules(
   to: string,
 ) {
   for (const rule of rules) {
-    const amount = ruleAmount(rule, from, to);
+    if (!ruleActiveDuring(rule, from, to) || !ruleOccursOn(rule, to)) continue;
+    const rateBps =
+      rule.renewalDate && rule.renewalRateBps != null && to >= rule.renewalDate
+        ? rule.renewalRateBps
+        : (rule.annualRateBps ?? 0);
+    const linkedBalance = rule.linkedAccountId
+      ? (balances.get(rule.linkedAccountId) ?? 0)
+      : 0;
+    const rate = periodicRate(rateBps, periodsPerYear(rule.frequency));
+    if (rule.ruleType === "asset_growth") {
+      if (rule.linkedAccountId)
+        balances.set(rule.linkedAccountId, linkedBalance * (1 + rate));
+      continue;
+    }
+    if (rule.ruleType === "yield") {
+      const generated = Math.round(Math.abs(linkedBalance) * rate);
+      const destination =
+        rule.treatment === "reinvest" ? rule.linkedAccountId : rule.toAccountId;
+      if (destination)
+        balances.set(destination, (balances.get(destination) ?? 0) + generated);
+      continue;
+    }
+    if (rule.ruleType === "debt_interest") {
+      if (rule.linkedAccountId)
+        balances.set(
+          rule.linkedAccountId,
+          linkedBalance - Math.round(Math.abs(linkedBalance) * rate),
+        );
+      continue;
+    }
+    if (rule.ruleType === "debt_payment") {
+      const payment = rule.amountMinor;
+      const interest = Math.round(Math.abs(linkedBalance) * rate);
+      const principal = Math.max(
+        0,
+        Math.min(Math.abs(linkedBalance), payment - interest),
+      );
+      if (rule.fromAccountId)
+        balances.set(
+          rule.fromAccountId,
+          (balances.get(rule.fromAccountId) ?? 0) - payment,
+        );
+      if (rule.linkedAccountId)
+        balances.set(rule.linkedAccountId, linkedBalance + principal);
+      continue;
+    }
+    const amount = rule.amountMinor;
     if (!amount) continue;
     if (rule.fromAccountId)
       balances.set(
@@ -252,28 +320,9 @@ export function buildNetWorthTimeline(
     });
   let previous = today;
   for (const date of dates.filter((item) => item > today)) {
-    const months = daysBetween(previous, date) / 30.4375;
-    for (const account of accounts) {
-      let value = balances.get(account.id) ?? 0;
-      const liability =
-        account.accountType === "liability" ||
-        account.accountType === "credit_card" ||
-        value < 0;
-      // V7.2 intentionally removes asset growth and depreciation assumptions.
-      // Assets change through explicit projection rules, equity, and dividends;
-      // liabilities may still accrue their configured interest.
-      const annualRate = liability ? account.annualInterestBps : 0;
-      value *= Math.pow(1 + annualRate / 10_000, months / 12);
-      // Cash-funded payments must be represented by a projection transfer so
-      // both the paying account and receiving asset/liability change together.
-      value += liability
-        ? 0
-        : (account.annualEquityGainMinor + account.annualDividendMinor) *
-          (months / 12);
-      balances.set(account.id, value);
-    }
-    // Recurring income, expenses, transfers, and debt payments now affect the
-    // selected real accounts instead of an invented projected-cash-flow layer.
+    // Every future account change now comes from a visible projection rule.
+    // Legacy account-assumption columns remain readable for migration safety
+    // but are deliberately not applied, preventing double counting.
     applyProjectionRules(balances, projectionRules, previous, date);
     // A dated account balance is authoritative. Projection variables run up to
     // the anchor, the balance is reset, and subsequent variables continue from
